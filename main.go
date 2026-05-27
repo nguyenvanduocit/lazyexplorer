@@ -39,6 +39,26 @@ func main() {
 	// navigation can descend below it but never above.
 	start := "."
 	if len(os.Args) > 1 {
+		// Short non-TUI commands resolved here so packagers (Homebrew formula
+		// test do block, debian postinst, etc.) can probe the binary without
+		// driving the alt-screen. buildVersion is the ldflags-stamped release
+		// version (see telemetry.go).
+		switch os.Args[1] {
+		case "--version", "-v", "version":
+			fmt.Println("lazyexplorer", buildVersion)
+			return
+		case "--help", "-h", "help":
+			fmt.Println("Usage: lazyexplorer [DIR]")
+			fmt.Println("  DIR       directory to explore (defaults to current working directory)")
+			fmt.Println("  --version print version and exit")
+			fmt.Println("  --help    print this help and exit")
+			fmt.Println()
+			fmt.Println("Keys: q/ctrl+c quit · j/k or ↑↓ move · l/enter open · h/← up")
+			fmt.Println("      d delete · r rename · J/ctrl+d page-down · K/ctrl+u page-up")
+			fmt.Println()
+			fmt.Println("Telemetry (opt-in): LE_TELEMETRY=1 DD_API_KEY=… — see README.md.")
+			return
+		}
 		start = os.Args[1]
 	}
 	root, err := filepath.Abs(start)

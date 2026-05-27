@@ -42,8 +42,8 @@ func (m model) layout() geometry {
 
 const (
 	// minPanelInnerCols is the smallest a pane's content area may shrink to
-	// during a divider drag. Parity with the old border-era floor:
-	// minPanelCols(16) − 2 cols of border = 14 cols of actual content.
+	// during a divider drag — picked so a name + one space + a size column
+	// (the typical row shape in the list pane) still fit at the floor.
 	minPanelInnerCols = 14
 
 	// Divider geometry — 3 cols total: [pad-left][glyph][pad-right]. The two

@@ -48,6 +48,7 @@ archives:
       {{- if eq .Arch "amd64" }}x86_64
       {{- else }}{{ .Arch }}{{ end }}
     files:
+      - LICENSE
       - README.md
       - docs/**/*
 
@@ -72,3 +73,25 @@ release:
   draft: false
   prerelease: auto
   name_template: "lazyexplorer {{ .Version }}"
+
+# Auto-publish a Homebrew formula on every release to nguyenvanduocit/homebrew-tap.
+# The token comes from HOMEBREW_TAP_GITHUB_TOKEN secret (set on this repo with
+# write access to the tap repo). `brew install nguyenvanduocit/tap/lazyexplorer`
+# after the release lands.
+brews:
+  - name: lazyexplorer
+    repository:
+      owner: nguyenvanduocit
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: "https://github.com/nguyenvanduocit/lazyexplorer"
+    description: "Lazygit-style terminal file explorer for the vibe-code workflow. Two panels, async preview, opt-in Datadog telemetry."
+    license: "MIT"
+    commit_author:
+      name: goreleaserbot
+      email: goreleaser@nguyenvanduocit.users.noreply.github.com
+    install: |
+      bin.install "lazyexplorer"
+    test: |
+      assert_match "lazyexplorer #{version}", shell_output("#{bin}/lazyexplorer --version")
