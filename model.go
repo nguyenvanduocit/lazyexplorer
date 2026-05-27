@@ -1,0 +1,799 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
+)
+
+// pollInterval is how often the poll loop re-checks cwd for external changes
+// (files an agent adds/edits/removes beside us). One second is responsive
+// enough for a glance-beside-the-agent companion and dirt cheap: a steady-state
+// tick is one os.ReadDir gated by dirSig (see syncFromDisk).
+const pollInterval = time.Second
+
+// tickMsg drives the poll loop. tickCmd schedules the next one; Init kicks off
+// the first and every tickMsg reschedules, so the loop self-sustains.
+type tickMsg struct{}
+
+func tickCmd() tea.Cmd {
+	return tea.Tick(pollInterval, func(time.Time) tea.Msg { return tickMsg{} })
+}
+
+// previewRenderedMsg carries the result of an async renderer (glamour/chroma/…)
+// back to the Update loop. gen identifies which dispatch produced it (stale
+// results are dropped); width is the body width it was rendered at; lines are the
+// output (valid only when err is nil); preStyled reports whether those lines
+// carry verbatim ANSI / are pre-fit to width (renderPreview then skips fitWidth).
+type previewRenderedMsg struct {
+	gen       uint64
+	width     int
+	lines     []string
+	preStyled bool
+	err       error
+}
+
+type mode int
+
+const (
+	modeNormal mode = iota
+	modeConfirmDelete
+	modeRename
+)
+
+type model struct {
+	root string // jail root — cwd may equal or descend from this, never above
+	cwd  string
+
+	entries []entry
+	cursor  int
+	listTop int // scroll offset of the left list
+
+	fsSig uint64 // dirSig of the current listing; the poll loop diffs against it
+
+	preview    []string
+	previewTop int // scroll offset of the right panel
+
+	// Folder-preview state. previewIsDir distinguishes a folder listing (drawn
+	// row-by-row via renderEntryRow at view time, FR1) from a file/markdown
+	// preview (drawn from m.preview). It must default OFF — renderPreview and
+	// previewClick both branch on it, so a stale "true" after navigating to a
+	// file would mis-route them. previewEntries is the data; nil-vs-empty is
+	// the empty-folder placeholder signal.
+	previewEntries []entry
+	previewIsDir   bool
+
+	previewPreStyled bool   // preview lines carry verbatim ANSI (markdown/code) → renderPreview skips fitWidth
+	srcPath          string // abs path of the selected renderable file; "" = selection has no preview renderer
+	srcRaw           []byte // its content (normalized text for text renderers; raw bytes otherwise)
+	srcWidth         int    // body width m.preview was rendered at (cache key); 0 = not yet rendered
+	renderStyle      string // app-level style hint resolved once at startup ("dark"/"light"/"notty"); "" → auto
+
+	// Async preview render bookkeeping. A renderer (glamour/chroma/…) is too slow
+	// to run on the Update goroutine (a large file would freeze every keystroke and
+	// the poll loop), so rendering is dispatched as a tea.Cmd and the result returns
+	// as a previewRenderedMsg. renderGen tags each dispatch; a result is applied
+	// only if its gen still matches, which discards a stale render that lands after
+	// the user has already navigated on. pendingWidth is the body width of the
+	// in-flight render (0 = none), so syncPreview doesn't re-dispatch the same work
+	// every Update tick — and drives the "rendering…" chip.
+	renderGen    uint64
+	pendingWidth int
+
+	mode      mode
+	input     string // buffer for rename
+	statusMsg string
+
+	leftRatio float64 // left panel width as a fraction of total; drag-adjustable
+	dragging  bool    // true while the user is dragging the panel divider
+
+	width  int
+	height int
+
+	// Telemetry boundary (PRD §5.2). tel is the only telemetry surface the
+	// model touches — Update / refreshPreview / applyPreview / syncPreview
+	// call tel.Record(name, fields); the recorder owns all I/O. Default is
+	// noopRecorder when telemetry is off, so the call site stays uniform.
+	// renderStartedAt holds the time syncPreview dispatched the in-flight
+	// render — applyPreview reads it to compute action.preview_rendered's
+	// duration_ms (FR10/§5.3). syncPreview only sets it when tel.Active() so
+	// the no-op path skips the time.Now syscall.
+	tel             Recorder
+	renderStartedAt time.Time
+}
+
+func newModel(root string, tel Recorder) model {
+	if tel == nil {
+		tel = noopRecorder{}
+	}
+	m := model{root: root, cwd: root, leftRatio: 0.38, tel: tel}
+	m.reload()
+	return m
+}
+
+// reload re-reads m.cwd into entries and refreshes the preview for the cursor.
+func (m *model) reload() {
+	entries, err := readDir(m.cwd)
+	if err != nil {
+		m.statusMsg = "⚠ " + err.Error()
+		m.entries = nil
+		m.preview = nil
+		m.fsSig = 0
+		return
+	}
+	m.fsSig = dirSig(entries) // baseline for the poll loop, taken from the real entries
+	// Inject a synthetic ".." at the top so the user can navigate (and click) up,
+	// except at the jail root where ascending is forbidden. It is not a real
+	// filesystem entry: descend() routes it to ascend(), and rename/delete refuse it.
+	if m.cwd != m.root {
+		entries = append([]entry{{name: "..", isDir: true}}, entries...)
+	}
+	m.entries = entries
+	if m.cursor >= len(m.entries) {
+		m.cursor = max(0, len(m.entries)-1)
+	}
+	m.refreshPreview()
+}
+
+// syncFromDisk is the poll loop's refresh. It re-reads cwd and, only when the
+// listing actually changed (dirSig gate), rebuilds the view — preserving the
+// user's selection by NAME and the preview scroll offset. The gate is what keeps
+// a steady-state poll from re-reading the preview and re-rendering markdown every
+// tick: an unchanged directory costs one readDir and returns early.
+func (m *model) syncFromDisk() {
+	if _, err := os.Stat(m.cwd); err != nil {
+		m.recoverVanishedCwd() // cwd was deleted out from under us
+		return
+	}
+
+	entries, err := readDir(m.cwd)
+	if err != nil {
+		m.statusMsg = "⚠ " + err.Error()
+		m.entries = nil
+		m.preview = nil
+		m.fsSig = 0
+		return
+	}
+	sig := dirSig(entries)
+	if sig == m.fsSig {
+		return // nothing changed on disk
+	}
+	m.fsSig = sig
+
+	// Remember selection (by name) and scroll before we swap the slice out.
+	selName := ""
+	if m.cursor < len(m.entries) {
+		selName = m.entries[m.cursor].name
+	}
+	prevTop := m.previewTop
+
+	if m.cwd != m.root {
+		entries = append([]entry{{name: "..", isDir: true}}, entries...)
+	}
+	m.entries = entries
+
+	// Keep the cursor on the same name, not the same index, so a file added or
+	// removed above the selection doesn't silently re-point it at a neighbour.
+	// Fall back to a clamped index when the selected name is gone (e.g. deleted).
+	m.cursor = min(m.cursor, max(0, len(m.entries)-1))
+	if selName != "" {
+		for i, e := range m.entries {
+			if e.name == selName {
+				m.cursor = i
+				break
+			}
+		}
+	}
+
+	m.refreshPreview()     // re-read the (possibly modified) selected file/dir
+	m.previewTop = prevTop // refreshPreview reset scroll to 0; restore it...
+	m.scrollPreview(0)     // ...then clamp it into the new content's range
+}
+
+// recoverVanishedCwd handles cwd being deleted while we're viewing it (e.g. an
+// agent removes a scratch folder). It climbs to the nearest still-existing
+// ancestor — never above the jail root — and reloads there, rather than leaving
+// the user stuck on a dead directory.
+func (m *model) recoverVanishedCwd() {
+	for m.cwd != m.root {
+		m.cwd = filepath.Dir(m.cwd)
+		if _, err := os.Stat(m.cwd); err == nil {
+			break
+		}
+	}
+	m.cursor, m.listTop, m.previewTop = 0, 0, 0
+	m.statusMsg = "⚠ folder removed — moved up"
+	m.reload() // re-establishes fsSig, entries and preview at the new cwd
+}
+
+// refreshPreview loads the right panel for the currently selected entry.
+func (m *model) refreshPreview() {
+	// view.change telemetry (PRD §5.3, FR9): one event per refreshPreview
+	// invocation — that IS the "cursor moved → preview reload" surface. Deferred
+	// so it fires on every early-return branch with the post-state, and so the
+	// reset hygiene below stays the visible top-of-function block. Record is
+	// non-blocking (drop-on-full, FR14), so this never extends the Update
+	// goroutine's tick.
+	defer func() {
+		kind := "file"
+		var name string
+		if m.cursor < len(m.entries) {
+			sel := m.entries[m.cursor]
+			name = sel.name
+			switch {
+			case name == "..":
+				kind = "parent"
+			case sel.isDir:
+				kind = "dir"
+			}
+		}
+		m.tel.Record("view.change", map[string]any{
+			"entry_kind": kind,
+			"ext_class":  extClass(name),
+			"cwd_depth":  cwdDepth(m.root, m.cwd),
+		})
+	}()
+
+	// Reset hygiene: this runs on every cursor move, so default the renderable
+	// state OFF here — only the renderer branch below turns it on. Skipping this
+	// would leave previewPreStyled true after navigating a rendered file → a plain
+	// one, making renderPreview skip fitWidth on plain text (long lines overflow).
+	m.previewTop = 0
+	m.preview = nil // every branch below populates it (or leaves the dir branch to set previewEntries instead) — same reset discipline as the rest
+	m.previewPreStyled = false
+	m.srcPath = ""
+	m.srcRaw = nil
+	m.srcWidth = 0
+	m.pendingWidth = 0 // the selection is changing; cancel any in-flight render's claim so syncPreview re-dispatches
+	// Folder-preview state defaults OFF, same discipline: every non-dir branch
+	// below leaves it off, only the dir branch turns it on. Skipping this
+	// reset would carry a previous dir's entries into a file preview and
+	// confuse previewClick + renderPreview's mode switch.
+	m.previewEntries = nil
+	m.previewIsDir = false
+
+	if len(m.entries) == 0 {
+		m.preview = []string{dimStyle.Render("(empty directory)")}
+		return
+	}
+	sel := m.entries[m.cursor]
+	full := filepath.Join(m.cwd, sel.name)
+	if sel.isDir {
+		entries, err := previewDir(full)
+		if err != nil {
+			// Surface the read error through the file-preview channel: keep
+			// previewIsDir false so renderPreview takes the m.preview path
+			// and shows this single line, the same channel a binary/empty
+			// file error uses. previewClick guards on previewEntries length,
+			// so it stays a noop on an unreadable folder.
+			m.preview = []string{"⚠ " + err.Error()}
+			return
+		}
+		m.previewEntries = entries
+		m.previewIsDir = true
+		return
+	}
+
+	content, kind := readPreviewBytes(full, sel.size)
+	// A registered renderer (markdown/code/image/…) takes over when it matches the
+	// file AND the content suits it: text renderers need real text (skipped on a
+	// binary file), binary renderers (image) run regardless. Rendering itself is
+	// async (see syncPreview) — here we only stash the source and show an instant
+	// placeholder, never run the heavy renderer inline (that would freeze Update).
+	if r, ok := rendererFor(sel.name); ok && (r.binary || kind == "text") {
+		m.srcPath = full
+		if r.binary {
+			m.srcRaw = content // raw bytes (image reads the path; content is incidental)
+			m.preview = []string{dimStyle.Render("(rendering " + r.name + "…)")}
+		} else {
+			m.srcRaw = []byte(normalizeText(content)) // text renderers get normalized source (FR8)
+			m.preview = plainLines(content)           // readable raw-source placeholder until the render lands
+		}
+		return
+	}
+	// No renderer (or a text renderer facing a binary file) → plain/placeholder.
+	if kind == "text" {
+		m.preview = plainLines(content)
+	} else {
+		m.preview = placeholderLines(kind, content, sel.size)
+	}
+}
+
+// previewBodyWidth returns the content columns of the right panel, matching the
+// rightInner width View() renders into, so a renderer wraps to the real draw area.
+func (m model) previewBodyWidth() int {
+	g := m.layout()
+	return g.rightInner
+}
+
+// syncPreview is the single reconciliation point for async preview rendering.
+// Called once at the tail of Update, it inspects the current state and returns a
+// render Cmd when — and only when — the displayed preview is out of date with the
+// selected renderable file at the current width. It returns nil (no work) for a
+// non-renderable selection, an unknown width (deferred until WindowSizeMsg), a
+// preview already rendered at this width (cache hit), an in-flight render already
+// targeting this width, or while the divider is being dragged (reflow waits for
+// release so a drag doesn't spawn a render per motion event).
+//
+// Each dispatch bumps renderGen and records pendingWidth, so the result can be
+// matched back (stale ones discarded) and repeated Update ticks don't re-spawn
+// the same render. The heavy renderer runs inside the returned closure, off the
+// Update goroutine — this is what keeps the UI responsive.
+func (m *model) syncPreview() tea.Cmd {
+	if m.srcPath == "" {
+		return nil // selection has no renderer
+	}
+	if m.dragging {
+		return nil // defer reflow until the divider settles (avoid a render per motion)
+	}
+	w := m.previewBodyWidth()
+	if w <= 0 {
+		return nil // width not known yet (initial load before first WindowSizeMsg)
+	}
+	if m.srcWidth == w {
+		return nil // already rendered this source at this width (cache hit)
+	}
+	if m.pendingWidth == w {
+		return nil // a render for this exact width is already in flight
+	}
+	r, ok := rendererFor(filepath.Base(m.srcPath))
+	if !ok {
+		return nil // defensive: srcPath is only set when a renderer matched
+	}
+
+	m.renderGen++
+	m.pendingWidth = w
+	// Stamp the dispatch time only when telemetry is on (PRD §5.3) — the no-op
+	// path stays bytes-identical (FR6) without the time.Now syscall. applyPreview
+	// reads + clears renderStartedAt when the result lands.
+	if m.tel.Active() {
+		m.renderStartedAt = time.Now()
+	}
+	gen, path, raw, style := m.renderGen, m.srcPath, m.srcRaw, m.renderStyle
+	return func() tea.Msg {
+		lines, preStyled, err := r.render(path, raw, w, style)
+		return previewRenderedMsg{gen: gen, width: w, lines: lines, preStyled: preStyled, err: err}
+	}
+}
+
+// applyPreview applies a completed render. It drops a stale result — one whose
+// gen no longer matches, meaning the user navigated (or resized) and a newer
+// render now owns the preview — so fast scrolling never shows the wrong file's
+// content. previewPreStyled is taken from the result (a plain placeholder render
+// sets it false → renderPreview keeps fitWidth). On renderer error it falls back
+// to the raw source as plain text.
+func (m *model) applyPreview(msg previewRenderedMsg) {
+	if msg.gen != m.renderGen {
+		return // stale: a newer render was dispatched since; it owns pendingWidth
+	}
+	m.pendingWidth = 0
+
+	// duration_ms for action.preview_rendered (PRD §5.3). renderStartedAt was
+	// stamped in syncPreview only when telemetry is active; a zero value means
+	// telemetry is off (or this is a stale-but-reaching path) — report 0.
+	var durationMS int64
+	if !m.renderStartedAt.IsZero() {
+		durationMS = time.Since(m.renderStartedAt).Milliseconds()
+		m.renderStartedAt = time.Time{} // clear so the next dispatch starts fresh
+	}
+
+	// Renderer name comes from the registry — one indirection through srcPath
+	// keeps telemetry honest about which renderer produced the result.
+	var renderer string
+	if r, ok := rendererFor(filepath.Base(m.srcPath)); ok {
+		renderer = r.name
+	}
+
+	if msg.err != nil {
+		// plainLines on srcRaw is safe for text renderers (srcRaw is normalized
+		// text) and for image (which never errors → never reaches here). A future
+		// binary renderer that DOES error should fall back to a typed placeholder,
+		// not raw bytes — which would render as garbage.
+		m.preview = plainLines(m.srcRaw)
+		m.previewPreStyled = false
+		m.srcWidth = 0
+		m.statusMsg = "⚠ preview render failed, showing source"
+
+		// error.render_fail (FR11). errorClass enums the renderer error origin;
+		// the raw msg.err.Error() string is intentionally NOT included — it may
+		// carry a path (see PRD §5.4 invariant).
+		m.tel.Record("error.render_fail", map[string]any{
+			"renderer":    renderer,
+			"error_class": errorClass(msg.err),
+		})
+		return
+	}
+	m.preview = msg.lines
+	m.previewPreStyled = msg.preStyled
+	m.srcWidth = msg.width
+	m.scrollPreview(0) // clamp the viewport into the freshly-sized content
+
+	// action.preview_rendered (FR10). lines is the rendered line count, NOT
+	// the file's logical line count — backend can correlate against width.
+	m.tel.Record("action.preview_rendered", map[string]any{
+		"renderer":    renderer,
+		"width":       msg.width,
+		"lines":       len(msg.lines),
+		"duration_ms": durationMS,
+	})
+}
+
+func (m model) Init() tea.Cmd { return tickCmd() }
+
+func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+	switch msg := msg.(type) {
+	case tickMsg:
+		// Poll cwd for changes an agent (or anything else) made beside us. Skip
+		// while the user is mid-prompt or dragging the divider so we never yank
+		// the selection or churn the layout out from under them. Always reschedule
+		// so the loop keeps running regardless.
+		if m.mode == modeNormal && !m.dragging {
+			m.syncFromDisk()
+		}
+		cmd = tickCmd()
+	case tea.WindowSizeMsg:
+		m.width, m.height = msg.Width, msg.Height
+		// Width is now known (or changed) — the tail syncPreview renders the
+		// deferred markdown / reflows it to the new width.
+	case tea.MouseMsg:
+		if m.mode != modeNormal { // ignore mouse while in a prompt
+			return m, nil
+		}
+		var nm tea.Model
+		nm, cmd = m.handleMouse(msg)
+		m = nm.(model)
+	case tea.KeyPressMsg:
+		var nm tea.Model
+		switch m.mode {
+		case modeConfirmDelete:
+			nm, cmd = m.updateConfirmDelete(msg)
+		case modeRename:
+			nm, cmd = m.updateRename(msg)
+		default:
+			nm, cmd = m.updateNormal(msg)
+		}
+		m = nm.(model)
+	case previewRenderedMsg:
+		m.applyPreview(msg)
+		return m, nil
+	default:
+		return m, nil
+	}
+	// Single reconciliation point: whatever the message above did to the
+	// selection, width, or divider, decide here whether a preview (re)render
+	// must be dispatched off the Update goroutine. nil when nothing's needed.
+	return m, tea.Batch(cmd, m.syncPreview())
+}
+
+// handleMouse maps clicks and wheel events onto the two panels using the same
+// geometry the renderer uses, so hit-testing can never drift from the layout.
+// In bubbletea v2 the mouse action is encoded by the message TYPE (click /
+// release / motion / wheel) rather than an Action field, so we switch on the
+// concrete type; e holds the shared cursor data (button + position).
+//
+// The divider's 3 cols are a "no-pane" zone: a left-press anywhere in them
+// starts a drag (wider hit-zone is the whole point of the padding — PRD
+// FR4/D5), a wheel over them noops (FR9), and a left-click without drag
+// intent on the status row noops (FR7). All other clicks route to list or
+// preview by the e.X &lt; dividerStart split.
+func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	g := m.layout()
+	e := msg.Mouse()
+	overDivider := e.X >= g.dividerStart && e.X < g.dividerStart+dividerWidth
+
+	switch msg.(type) {
+	case tea.MouseMotionMsg:
+		// Divider drag in progress: track the cursor column.
+		if m.dragging {
+			m.setLeftFromX(e.X)
+		}
+		return m, nil
+
+	case tea.MouseReleaseMsg:
+		m.dragging = false
+		// Reflow to the divider's new width happens in Update's tail syncPreview
+		// now that dragging is false (it was deferred during the drag motions).
+		return m, nil
+
+	case tea.MouseWheelMsg:
+		// Wheel over the divider is a noop — neither pane owns those cols, so
+		// spinning over the visual separator must not jump the list cursor or
+		// scroll the preview (FR9). Without this guard the e.X &lt; dividerStart
+		// split would route divider-col wheel events into the list pane.
+		if overDivider {
+			return m, nil
+		}
+		overLeft := e.X < g.dividerStart
+		switch e.Button {
+		case tea.MouseWheelUp:
+			if overLeft {
+				if m.cursor > 0 {
+					m.cursor--
+					m.refreshPreview()
+				}
+			} else {
+				m.scrollPreview(-3)
+			}
+		case tea.MouseWheelDown:
+			if overLeft {
+				if m.cursor < len(m.entries)-1 {
+					m.cursor++
+					m.refreshPreview()
+				}
+			} else {
+				m.scrollPreview(3)
+			}
+		}
+		return m, nil
+
+	case tea.MouseClickMsg:
+		// Divider drag start: a left-press anywhere in the divider's 3 cols
+		// (pad-left, glyph, pad-right) starts a drag and snaps the glyph to
+		// the clicked col. Excluding the status row (m.height-1) means a
+		// click on the status text under the divider's X range doesn't
+		// accidentally start a drag.
+		if e.Button == tea.MouseLeft && e.Y < m.height-1 && overDivider {
+			m.dragging = true
+			m.setLeftFromX(e.X)
+			return m, nil
+		}
+		if e.Button != tea.MouseLeft {
+			return m, nil
+		}
+		// Left-click on the divider that wasn't a drag-start (status row, or
+		// future per-pane modes) is a noop — divider is a "no-pane" zone and
+		// must never route to list or preview (FR7).
+		if overDivider {
+			return m, nil
+		}
+		overLeft := e.X < g.dividerStart
+		if !overLeft {
+			m.previewClick(e.Y, g) // click a name in a folder listing → open + select it
+			return m, nil
+		}
+		row := e.Y - g.firstRow
+		if row < 0 || row >= g.bodyH {
+			return m, nil
+		}
+		idx := g.listTop + row
+		if idx < 0 || idx >= len(m.entries) {
+			return m, nil
+		}
+		if idx == m.cursor && m.entries[idx].isDir {
+			m.descend() // click again on the selected folder opens it
+		} else {
+			m.cursor = idx
+			m.refreshPreview()
+		}
+	}
+	return m, nil
+}
+
+// setLeftFromX pins the divider glyph under the cursor: column x becomes the
+// dividerCenter, so leftRatio = x / m.width. Click on either pad column of the
+// divider snaps the glyph to that col (FR4) — a one-col visual jump that
+// matches the click-to-snap pattern from the border era. The value is stored
+// as a ratio and only clamped at render time (leftInnerWidth), keeping the
+// split proportional across terminal resizes.
+func (m *model) setLeftFromX(x int) {
+	if m.width <= 0 {
+		return
+	}
+	m.leftRatio = float64(x) / float64(m.width)
+}
+
+// scrollPreview moves the right-panel viewport by delta lines, clamped to
+// range. The length comes from previewLen so a folder listing (entries) and
+// a file preview (lines) share the same scroll math — no branch needed here.
+func (m *model) scrollPreview(delta int) {
+	_, bodyH := m.previewScroll()
+	maxTop := max(0, m.previewLen()-bodyH)
+	m.previewTop = min(max(0, m.previewTop+delta), maxTop)
+}
+
+// previewClick handles a left-click inside the right panel. When that panel is
+// showing a folder listing (the selected entry is a directory), clicking one of
+// its rows enters that folder and lands the cursor on the clicked item — the
+// same end state as descending via the left panel and moving onto it. Clicks on
+// a file preview, the panel border, or empty space do nothing.
+func (m *model) previewClick(y int, g geometry) {
+	if len(m.entries) == 0 {
+		return
+	}
+	sel := m.entries[m.cursor]
+	if !sel.isDir {
+		return // the right panel is a file preview, not a clickable listing
+	}
+
+	top, bodyH := m.previewScroll()
+	row := y - g.firstRow
+	if row < 0 || row >= bodyH {
+		return // panel border or the status row below — not a listing row
+	}
+
+	// The listing rows map 1:1, in order, to m.previewEntries (no synthetic
+	// "..") — the SAME slice renderPreview drew. So resolve the clicked item
+	// straight from that cached slice: render + click can never disagree
+	// about which entry sits on which row. A click on empty space or an
+	// empty-folder placeholder (len==0) falls through the bound and noops.
+	lineIdx := top + row
+	if lineIdx >= len(m.previewEntries) {
+		return
+	}
+	clicked := m.previewEntries[lineIdx].name
+
+	// Enter the folder (jail-guarded) and land on the clicked item. descend()
+	// reloads entries (prepending the synthetic ".." for a sub-folder), so match
+	// by name rather than index. When sel is the synthetic "..", descend() routes
+	// to ascend() and the same name lookup finds the item in the parent.
+	m.descend()
+	for i, e := range m.entries {
+		if e.name == clicked {
+			m.cursor = i
+			break
+		}
+	}
+	m.refreshPreview()
+}
+
+func (m model) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "q", "ctrl+c":
+		return m, tea.Quit
+
+	case "down", "j":
+		if m.cursor < len(m.entries)-1 {
+			m.cursor++
+			m.refreshPreview()
+		}
+	case "up", "k":
+		if m.cursor > 0 {
+			m.cursor--
+			m.refreshPreview()
+		}
+	case "g":
+		m.cursor = 0
+		m.refreshPreview()
+	case "G":
+		m.cursor = max(0, len(m.entries)-1)
+		m.refreshPreview()
+
+	case "enter", "l", "right":
+		m.descend()
+	case "backspace", "h", "left":
+		m.ascend()
+
+	// preview scrolling
+	case "J", "ctrl+d":
+		m.scrollPreview(5)
+	case "K", "ctrl+u":
+		m.scrollPreview(-5)
+
+	case "r":
+		if len(m.entries) > 0 && m.entries[m.cursor].name != ".." {
+			m.mode = modeRename
+			m.input = m.entries[m.cursor].name
+			m.statusMsg = ""
+		}
+	case "d":
+		if len(m.entries) > 0 && m.entries[m.cursor].name != ".." {
+			m.mode = modeConfirmDelete
+			m.statusMsg = ""
+		}
+	}
+	return m, nil
+}
+
+// descend enters the selected folder (if it is one).
+func (m *model) descend() {
+	if len(m.entries) == 0 {
+		return
+	}
+	sel := m.entries[m.cursor]
+	if sel.name == ".." {
+		m.ascend() // the synthetic parent entry navigates up, with the root guard
+		return
+	}
+	if !sel.isDir {
+		return
+	}
+	target := filepath.Join(m.cwd, sel.name)
+	if !withinRoot(m.root, target) {
+		m.statusMsg = "⚠ blocked: outside root"
+		return
+	}
+	m.cwd = target
+	m.cursor = 0
+	m.listTop = 0
+	m.statusMsg = ""
+	m.reload()
+}
+
+// ascend goes up one level, refusing to cross above the jail root.
+func (m *model) ascend() {
+	if m.cwd == m.root {
+		m.statusMsg = "⚠ at root — cannot go higher"
+		return
+	}
+	parent := filepath.Dir(m.cwd)
+	if !withinRoot(m.root, parent) {
+		m.statusMsg = "⚠ at root — cannot go higher"
+		return
+	}
+	prev := filepath.Base(m.cwd) // remember where we came from to place the cursor
+	m.cwd = parent
+	m.listTop = 0
+	m.reload()
+	// position cursor on the folder we just left
+	for i, e := range m.entries {
+		if e.name == prev {
+			m.cursor = i
+			break
+		}
+	}
+	m.refreshPreview()
+	m.statusMsg = ""
+}
+
+func (m model) updateConfirmDelete(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "y", "Y":
+		sel := m.entries[m.cursor]
+		target := filepath.Join(m.cwd, sel.name)
+		if err := os.RemoveAll(target); err != nil {
+			m.statusMsg = "⚠ delete failed: " + err.Error()
+		} else {
+			m.statusMsg = "deleted " + sel.name
+		}
+		m.mode = modeNormal
+		m.reload()
+	default: // any other key cancels
+		m.mode = modeNormal
+		m.statusMsg = "delete cancelled"
+	}
+	return m, nil
+}
+
+func (m model) updateRename(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.mode = modeNormal
+		m.statusMsg = "rename cancelled"
+	case "enter":
+		newName := m.input
+		m.mode = modeNormal
+		if newName == "" || newName == m.entries[m.cursor].name {
+			m.statusMsg = "rename cancelled"
+			return m, nil
+		}
+		// Guard against path traversal in the typed name.
+		if filepath.Base(newName) != newName {
+			m.statusMsg = "⚠ name cannot contain a path separator"
+			return m, nil
+		}
+		old := filepath.Join(m.cwd, m.entries[m.cursor].name)
+		dst := filepath.Join(m.cwd, newName)
+		if err := os.Rename(old, dst); err != nil {
+			m.statusMsg = "⚠ rename failed: " + err.Error()
+		} else {
+			m.statusMsg = "renamed to " + newName
+		}
+		m.reload()
+	case "backspace":
+		if len(m.input) > 0 {
+			// trim one rune, not one byte
+			r := []rune(m.input)
+			m.input = string(r[:len(r)-1])
+		}
+	default:
+		// Key.Text holds the printable characters of a key press (empty for
+		// non-text keys like arrows / function keys).
+		if msg.Text != "" {
+			m.input += msg.Text
+		}
+	}
+	return m, nil
+}

@@ -1,0 +1,58 @@
+# verify-sast-live keeps the scanner honest (PRD §5.6, FR5, T7).
+#
+# Contract: if SAST is running correctly, the canary at testdata/sast_canary.go
+# MUST be flagged on every PR. If it ever STOPS being flagged, the scanner has
+# silently broken (rule retired, config drift, suppressions creep) — this job
+# fails the build so we notice in CI rather than learning months later when a
+# real vuln slips by.
+#
+# How: poll Datadog Findings API for findings on this PR with file_path
+# matching sast_canary.go. We poll because SAST upload (the prior workflow) is
+# async — findings may take seconds to land in the Datadog backend. The
+# 5-minute total budget is loose enough to absorb backend hiccups without
+# being a hot wait.
+#
+# Note on API endpoint: Datadog's SAST findings live under the Code Security
+# API. The exact filter syntax may need tweaking at first CI run — log the raw
+# response on failure so the next iteration can refine the filter.
+name: Verify SAST Live
+on:
+  pull_request:
+    branches: [main]
+jobs:
+  verify-sast-live:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      DD_API_KEY: ${{ secrets.DD_API_KEY }}
+      DD_APP_KEY: ${{ secrets.DD_APP_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Poll Datadog Findings API for SAST canary
+        run: |
+          set -euo pipefail
+          # Allow up to ~5 minutes for SAST upload to land in the backend.
+          attempts=30
+          interval=10
+          # The Code Security findings API; service tag matches what
+          # datadog-sast.yml passes via DD_SERVICE.
+          url="https://api.datadoghq.com/api/v2/posture-management/findings?filter[evaluation]=fail&filter[resource_type]=code&filter[service]=lazyexplorer&page[size]=200"
+          for i in $(seq 1 "$attempts"); do
+            response=$(curl -fsSL \
+              -H "DD-API-KEY: $DD_API_KEY" \
+              -H "DD-APPLICATION-KEY: $DD_APP_KEY" \
+              "$url" || echo '{"data":[]}')
+            canary_hits=$(printf '%s' "$response" | jq '[.data[]? | select((.attributes.location.file_path // "") | endswith("sast_canary.go"))] | length')
+            if [ "${canary_hits:-0}" -gt 0 ]; then
+              echo "::notice::SAST canary detected ($canary_hits findings on sast_canary.go) — scanner is live."
+              exit 0
+            fi
+            echo "Attempt $i/$attempts: canary not yet visible, sleeping ${interval}s..."
+            sleep "$interval"
+          done
+          echo "::error::SAST canary not detected within $((attempts * interval))s — scanner may be silently broken (PRD FR5)."
+          echo "Last response (for debugging filter syntax):"
+          printf '%s\n' "${response:-<no response>}"
+          exit 1

@@ -1,0 +1,127 @@
+package main
+
+import (
+	"strings"
+	"testing"
+
+	tea "charm.land/bubbletea/v2"
+)
+
+// TestLeftInnerWidthClamp pins the leftRatio → leftInner conversion under the
+// divider-center semantics: ratio is the column of the glyph, so leftInner =
+// dividerCenter - dividerPadLeft, then clamped so each pane keeps at least
+// minPanelInnerCols of content and the divider gets its dividerWidth cols.
+// Degenerate-narrow terminals fall back to the floor instead of panicking
+// (PRD §5.4, §5.10 / D9-D10).
+func TestLeftInnerWidthClamp(t *testing.T) {
+	cases := []struct {
+		name  string
+		width int
+		ratio float64
+		want  int
+	}{
+		// At ratio=0.38 the glyph sits on col 38, so leftInner = 37 — 1 col
+		// wider than the old leftInner=36 because the left border is gone.
+		{"normal split", 100, 0.38, 37},
+		// ratio=0.05 → dividerCenter=5 → leftInner candidate 4 → clamped.
+		{"clamp too small", 100, 0.05, minPanelInnerCols},
+		// ratio=0.95 → leftInner candidate 94, hi = 100-3-14 = 83.
+		{"clamp too large", 100, 0.95, 100 - dividerWidth - minPanelInnerCols},
+		// At ratio=0.15 the floor catches: dividerCenter=15 → li=14.
+		{"at floor", 100, 0.15, minPanelInnerCols},
+		// Half-cent rounding: 100*0.380=38.0 → +0.5 → int=38.
+		{"rounds to nearest", 100, 0.380, 37},
+		// Exact minimum total width: 14 + dividerWidth + 14 = 31.
+		{"min total width", 31, 0.55, minPanelInnerCols},
+		// Below minimum total: best-effort degenerate, no panic.
+		{"degenerate tiny", 20, 0.50, minPanelInnerCols},
+	}
+	for _, c := range cases {
+		m := model{width: c.width, leftRatio: c.ratio, tel: noopRecorder{}}
+		if got := m.leftInnerWidth(); got != c.want {
+			t.Errorf("%s: leftInnerWidth(width=%d, ratio=%.3f) = %d, want %d",
+				c.name, c.width, c.ratio, got, c.want)
+		}
+	}
+}
+
+// TestDividerDrag walks the full press→motion→release cycle and asserts the
+// divider follows the cursor and the drag state flips correctly. Under the
+// new semantics a press at column x snaps the glyph to col x (so leftInner =
+// x - 1), and the entire 3-col divider band is a drag-start hit-zone.
+func TestDividerDrag(t *testing.T) {
+	m := model{width: 100, height: 30, leftRatio: 0.38, tel: noopRecorder{}}
+	g := m.layout()
+	if g.dividerStart != 37 {
+		t.Fatalf("setup: dividerStart = %d, want 37", g.dividerStart)
+	}
+	if g.leftInner != 37 {
+		t.Fatalf("setup: leftInner = %d, want 37", g.leftInner)
+	}
+
+	step := func(msg tea.MouseMsg) {
+		nm, _ := m.handleMouse(msg)
+		m = nm.(model)
+	}
+
+	// Press on the divider's pad-left col (dividerStart). Glyph snaps to col
+	// 37 → dividerCenter=37 → leftInner=36.
+	step(tea.MouseClickMsg{X: 37, Y: 5, Button: tea.MouseLeft})
+	if !m.dragging {
+		t.Fatal("press on divider did not start a drag")
+	}
+	if got := m.leftInnerWidth(); got != 36 {
+		t.Errorf("after press at dividerStart: leftInner = %d, want 36", got)
+	}
+
+	// Drag right: motion to x=50 → dividerCenter=50 → leftInner=49.
+	step(tea.MouseMotionMsg{X: 50, Y: 5, Button: tea.MouseLeft})
+	if got := m.leftInnerWidth(); got != 49 {
+		t.Errorf("after drag right: leftInner = %d, want 49", got)
+	}
+
+	// Drag far left past the clamp: motion to x=2 → leftInner clamped to floor.
+	step(tea.MouseMotionMsg{X: 2, Y: 5, Button: tea.MouseLeft})
+	if got := m.leftInnerWidth(); got != minPanelInnerCols {
+		t.Errorf("after drag past min: leftInner = %d, want %d", got, minPanelInnerCols)
+	}
+
+	// Release ends the drag.
+	step(tea.MouseReleaseMsg{X: 2, Y: 5, Button: tea.MouseLeft})
+	if m.dragging {
+		t.Fatal("release did not end the drag")
+	}
+
+	// Motion after release must NOT move the divider.
+	ratioBefore := m.leftRatio
+	step(tea.MouseMotionMsg{X: 70, Y: 5, Button: tea.MouseLeft})
+	if m.leftRatio != ratioBefore {
+		t.Errorf("motion after release moved divider: ratio %.3f → %.3f", ratioBefore, m.leftRatio)
+	}
+}
+
+// TestViewFillsHeight locks the invariant that View renders exactly m.height
+// rows — no blank "spare" line at the bottom, so the UI sits flush against the
+// terminal floor beside the agent pane. Regression guard for the old layout()
+// that subtracted an extra spare row and left a gap.
+func TestViewFillsHeight(t *testing.T) {
+	for _, h := range []int{10, 20, 30, 50} {
+		m := newModel(".", noopRecorder{})
+		nm, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: h})
+		m = nm.(model)
+		lines := strings.Count(m.View().Content, "\n") + 1
+		if lines != h {
+			t.Errorf("height=%d: View rendered %d lines, want %d (gap=%d)", h, lines, h, h-lines)
+		}
+	}
+}
+
+// TestPressOffDividerDoesNotDrag guards that ordinary clicks in the list area
+// are not swallowed by the divider hit-test.
+func TestPressOffDividerDoesNotDrag(t *testing.T) {
+	m := model{width: 100, height: 30, leftRatio: 0.38, tel: noopRecorder{}}
+	nm, _ := m.handleMouse(tea.MouseClickMsg{X: 10, Y: 5, Button: tea.MouseLeft})
+	if nm.(model).dragging {
+		t.Error("press in list area wrongly started a divider drag")
+	}
+}

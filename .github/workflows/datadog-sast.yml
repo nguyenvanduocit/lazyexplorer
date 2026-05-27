@@ -1,0 +1,41 @@
+# Datadog SAST on every PR into main (PRD §5.6, T7).
+#
+# datadog-ci is distributed via npm; the GitHub composite action is the
+# explicit "use this" path in Datadog's docs but versions drift, so we invoke
+# the CLI through npx and pin the npm package version. HIGH/CRITICAL findings
+# fail the job (PRD D10/FR3); MEDIUM/LOW comment without failing (FR4).
+#
+# go-security ruleset is the SAST equivalent for Go code; rules cover the
+# classic taint sinks (exec.Command from untrusted input, unvalidated path
+# open, SQL injection patterns, weak crypto). The canary testdata/sast_canary.go
+# is INTENTIONALLY unsafe and exists so verify-sast-live can keep the scanner
+# honest — see PRD §5.6 + FR5.
+name: Datadog SAST
+on:
+  pull_request:
+    branches: [main]
+jobs:
+  sast:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      security-events: write
+    env:
+      DD_API_KEY: ${{ secrets.DD_API_KEY }}
+      DD_APP_KEY: ${{ secrets.DD_APP_KEY }}
+      DD_SITE: datadoghq.com
+      DD_SERVICE: lazyexplorer
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Setup Node (for datadog-ci CLI)
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20'
+      - name: Install datadog-ci
+        # Pin to a known-good major; CI's npx cache makes subsequent runs cheap.
+        # If a future release breaks our flow, pin to a minor/patch here.
+        run: npm install -g @datadog/datadog-ci@2
+      - name: Run SAST scan + upload findings
+        run: datadog-ci sast upload .

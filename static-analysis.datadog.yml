@@ -1,0 +1,22 @@
+# Datadog Static Code Analysis config (PRD §5.5).
+#
+# Three Go-focused rulesets cover idiom (best-practices), security
+# (vet-equivalent + taint sinks), and inclusive language (project standard).
+#
+# ignore is load-bearing: tmp/ holds reference-only clones of other TUIs
+# (lipgloss, glow, crush, gh-dash, superfile, bubblezone, ntcharts,
+# harmonica) per root CLAUDE.md §Reference Code — they are NOT dependencies,
+# NOT compiled into lazyexplorer, and scanning them would generate thousands
+# of non-actionable findings. testdata/sast_canary.go is deliberately unsafe
+# (PRD D11) and is the SAST scanner's tripwire — Static Analysis ignores it
+# so its known-bad pattern doesn't pollute the static-analysis dashboard,
+# while SAST (a separate scanner) still scans it on every PR (see
+# .github/workflows/verify-sast-live.yml).
+rulesets:
+  - go-best-practices
+  - go-security
+  - go-inclusive
+
+ignore:
+  - tmp/
+  - testdata/sast_canary.go

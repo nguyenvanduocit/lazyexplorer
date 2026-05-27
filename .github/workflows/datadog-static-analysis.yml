@@ -1,0 +1,35 @@
+# Datadog Static Code Analysis on every PR into main (PRD §5.5, T7).
+#
+# Findings annotate the PR at the offending line. HIGH/CRITICAL fail the job
+# (PRD D10/FR3), blocking merge until resolved or downgraded via config.
+# MEDIUM/LOW post comments without failing the job (FR4) — they inform without
+# stopping the dev nhịp.
+#
+# Action security: every uses: ref is pinned to its full commit SHA per PRD
+# D8/T7. The `# v4` style comment after each SHA is the documented form so
+# Dependabot can recognise and advance these refs (it rewrites the SHA in
+# place while updating the trailing tag comment). Resolving the SHA from a
+# tag (gh api repos/<owner>/<repo>/git/refs/tags/<tag>) is the canonical
+# bootstrap step when adding a new action.
+name: Datadog Static Analysis
+on:
+  pull_request:
+    branches: [main]
+jobs:
+  static-analysis:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Run Datadog Static Analyzer
+        uses: DataDog/datadog-static-analyzer-github-action@4b0a60943e8263c9d574254bbb206a87a0f75531 # v1
+        with:
+          dd_api_key: ${{ secrets.DD_API_KEY }}
+          dd_app_key: ${{ secrets.DD_APP_KEY }}
+          dd_site: datadoghq.com
+          cpu_count: 2
+          # Performance statistics produce ~MB of CI logs; off by default.
+          enable_performance_statistics: false

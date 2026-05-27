@@ -1,0 +1,74 @@
+# goreleaser config — multi-arch CLI binaries, GitHub Release, SHA256 checksums.
+# Triggered by a pushed v* tag (see .github/workflows/release.yml). The
+# buildVersion ldflag stamps the tag into telemetry.go so every event carries
+# the actual release version in ddtags.
+#
+# Local dry run: `goreleaser release --snapshot --clean`
+# Local config lint: `goreleaser check`
+
+version: 2
+
+project_name: lazyexplorer
+
+before:
+  hooks:
+    - go mod tidy
+    - go vet ./...
+
+builds:
+  - id: lazyexplorer
+    binary: lazyexplorer
+    main: .
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      # arm64 Windows is the least-used permutation; skip to keep the release
+      # surface small. Add back if a user asks.
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+      - -X main.buildVersion={{ .Version }}
+
+archives:
+  - id: lazyexplorer
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else }}{{ .Arch }}{{ end }}
+    files:
+      - README.md
+      - docs/**/*
+
+checksum:
+  name_template: 'checksums.txt'
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot"
+
+changelog:
+  sort: asc
+  use: git
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - 'Merge pull request'
+      - 'Merge branch'
+
+release:
+  draft: false
+  prerelease: auto
+  name_template: "lazyexplorer {{ .Version }}"

@@ -1,0 +1,20 @@
+.gitnexus
+
+# Belt-and-suspenders — Datadog/runtime secrets live at ~/.config/lazyexplorer/.env.local (outside repo).
+# Reject any stray copy that lands inside the working tree.
+.env
+.env.*
+
+# Reference-only clones (root CLAUDE.md §Reference Code) — read for patterns, never compiled in.
+tmp/
+
+# Local build artifacts — `go build` drops the binary at repo root; goreleaser uses dist/.
+/lazyexplorer
+dist/
+
+# OS / editor noise.
+.DS_Store
+*.swp
+
+# Local OMC ledger archive — kept on disk for history but never committed.
+.omc/

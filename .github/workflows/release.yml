@@ -1,0 +1,40 @@
+# Release workflow — fires on every pushed `v*` tag. Builds multi-arch
+# binaries via goreleaser, uploads them to the matching GitHub Release with
+# SHA256 checksums + a tag-range changelog. The Datadog CI gates
+# (datadog-static-analysis / datadog-sast / verify-sast-live) run on PRs, NOT
+# on tag pushes, so they don't gate releases — branch-protection on main is
+# what keeps unsafe code out of the release-eligible tree.
+#
+# All action refs SHA-pinned per PRD D8 / T7.
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          # goreleaser needs full history to derive the changelog from the
+          # previous tag.
+          fetch-depth: 0
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - name: Run goreleaser
+        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
+        with:
+          version: '~> v2'
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
