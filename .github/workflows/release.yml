@@ -38,3 +38,8 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # PAT with write access to nguyenvanduocit/homebrew-tap so the brews:
+          # step in .goreleaser.yaml can push the generated Formula. GITHUB_TOKEN
+          # is scoped to THIS repo and cannot cross to the tap repo, so a
+          # repo-level secret is the required handoff.
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
