@@ -297,11 +297,11 @@
 
     <div class="cmd rise" style="animation-delay:.34s">
       <span class="pr">$</span>
-      <code id="install-cmd">go install github.com/nguyenvanduocit/lazyexplorer@latest</code>
+      <code id="install-cmd">brew install nguyenvanduocit/tap/lazyexplorer</code>
       <button class="txtbtn" data-copy="#install-cmd">[ copy ]</button>
     </div>
     <div class="undermark rise" style="animation-delay:.4s">
-      <span>go 1.26+</span><span>·</span><span>~13 MB static binary</span><span>·</span><span>no telemetry</span>
+      <span>macOS · Linux · Windows</span><span>·</span><span>~13 MB static binary</span><span>·</span><span>opt-in telemetry</span>
       <span>·</span><a href="https://github.com/nguyenvanduocit/lazyexplorer" target="_blank" rel="noopener">read the source ↗</a>
     </div>
 
@@ -425,16 +425,38 @@ markdown / code      syntax-aware
     <div class="idx reveal"><b>§03</b> GET&nbsp;IT</div>
     <div class="reveal">
       <div class="listing">
-        <div class="lh"><span>install</span><button class="txtbtn" data-copy="#cb-install" style="text-transform:none;letter-spacing:.04em">[ copy ]</button></div>
-        <pre id="cb-install"><span class="pr">$ </span>go install github.com/nguyenvanduocit/lazyexplorer@latest</pre>
-        <div class="note">Needs Go 1.26+. Builds a single static binary — no runtime, no config, no telemetry.</div>
+        <div class="lh"><span>install — Homebrew (macOS / Linux)</span><button class="txtbtn" data-copy="#cb-install-brew" style="text-transform:none;letter-spacing:.04em">[ copy ]</button></div>
+<pre id="cb-install-brew"><span class="pr">$ </span>brew install nguyenvanduocit/tap/lazyexplorer</pre>
+        <div class="note">
+          The canonical one-liner for third-party taps (same shape as <code>hashicorp/tap/terraform</code>,
+          <code>argoproj/tap/argo</code>). Prefer a shorter form? Tap once, then install short:
+        </div>
+<pre id="cb-install-brew-tap" style="margin-top:0"><span class="pr">$ </span>brew tap nguyenvanduocit/tap     <span class="cm"># one-time</span>
+<span class="pr">$ </span>brew install lazyexplorer        <span class="cm"># short from now on</span>
+<span class="pr">$ </span>brew upgrade lazyexplorer        <span class="cm"># later</span></pre>
+      </div>
+
+      <div class="listing">
+        <div class="lh"><span>install — Go toolchain</span><button class="txtbtn" data-copy="#cb-install-go" style="text-transform:none;letter-spacing:.04em">[ copy ]</button></div>
+<pre id="cb-install-go"><span class="pr">$ </span>go install github.com/nguyenvanduocit/lazyexplorer@latest</pre>
+        <div class="note">Needs Go 1.26+. Builds the binary into <code>$GOBIN</code>.</div>
+      </div>
+
+      <div class="listing">
+        <div class="lh"><span>install — pre-built binary</span><button class="txtbtn" data-copy="#cb-install-bin" style="text-transform:none;letter-spacing:.04em">[ copy ]</button></div>
+<pre id="cb-install-bin"><span class="pr">$ </span>curl -sSL <a href="https://github.com/nguyenvanduocit/lazyexplorer/releases/latest" target="_blank" rel="noopener" style="color:inherit">github.com/nguyenvanduocit/lazyexplorer/releases/latest</a> <span class="cm"># pick your arch</span></pre>
+        <div class="note">
+          Multi-arch tarballs (darwin / linux × amd64 + arm64) and a Windows zip live on every GitHub Release,
+          with SHA256 <code>checksums.txt</code> alongside.
+        </div>
       </div>
 
       <div class="listing">
         <div class="lh"><span>usage</span><button class="txtbtn" data-copy="#cb-usage" style="text-transform:none;letter-spacing:.04em">[ copy ]</button></div>
 <pre id="cb-usage"><span class="pr">$ </span>cd your-project
 <span class="pr">$ </span>lazyexplorer            <span class="cm"># explore the current directory</span>
-<span class="pr">$ </span>lazyexplorer ./docs     <span class="cm"># or point it somewhere — that becomes the root</span></pre>
+<span class="pr">$ </span>lazyexplorer ./docs     <span class="cm"># or point it somewhere — that becomes the root</span>
+<span class="pr">$ </span>lazyexplorer --version  <span class="cm"># print version and exit</span></pre>
       </div>
 
       <div class="keys">
