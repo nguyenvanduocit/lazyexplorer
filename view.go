@@ -210,6 +210,22 @@ func (m model) leftInnerWidth() int {
 	return li
 }
 
+// modalSize returns the INNER content dimensions handed to renderPaletteBody /
+// renderHelpBody. The OUTER box (inner + modalBoxStyle frame) is clamped to fit
+// m.width/height minus a margin each side, with a floor — same best-effort
+// discipline as leftInnerWidth: a narrow (<80, vertical) or short terminal
+// shrinks the box but it never overflows. Subtracting the frame here (not in the
+// caller) is why a bordered+padded box still fits at width 60.
+func (m model) modalSize() (innerW, innerH int) {
+	fw := modalBoxStyle.GetHorizontalFrameSize()
+	fh := modalBoxStyle.GetVerticalFrameSize()
+	outerW := min(modalTargetCols, m.width-modalMargin*2)
+	outerH := min(modalTargetRows, (m.height-1)-modalMargin*2) // -1: status row
+	outerW = min(max(outerW, modalMinCols), m.width)           // floor, then never exceed screen
+	outerH = min(max(outerH, modalMinRows), m.height-1)
+	return max(1, outerW-fw), max(1, outerH-fh)
+}
+
 // View renders the whole screen. In bubbletea v2 the alt-screen and mouse modes
 // are declared on the returned View (they are no longer program options), so
 // every return path sets them — including the early "loading…" frame, otherwise
