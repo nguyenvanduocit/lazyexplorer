@@ -5,21 +5,16 @@
 > bước nhảy này lớn so với chiều cao panel preview, làm mắt phải bắt lại vị trí sau
 > mỗi lần scroll → khó chịu, đặc biệt khi đang đọc code hoặc markdown từng dòng.
 
-Status: **accepted (wheel surface)** · Author: bug-filing session · Ngày: 2026-05-27 · Shipped: 2026-05-28
+Status: **accepted** · Author: bug-filing session · Ngày: 2026-05-27 · Shipped: 2026-05-28 (✅ `go build && go vet && go test ./... && go test -race ./...` green)
 
-> **Split-ship note:** D1 (wheel ±1 per notch) shipped 2026-05-28 — `previewLineStep`
-> const + wheel callers in `model.go`, tests in `scroll_test.go`. D2 (J/K → ±1) and
-> D3 (ctrl+d/u → half-page) ship together with [[prd-pane-focus]]: that PRD's D13
-> deletes the J/K legacy keys and D11 routes ctrl+d/u as half-page in the focused
-> pane — the same end-state, reached through the focus-aware key router rather
-> than a standalone caller tweak. This PRD is fully closed once pane-focus lands.
-
-> Đã ship một phần qua `prd-pane-focus.md` (2026-05-28): tầng **fine 1 dòng**
-> (D2) nay nằm trên `j/k` + focus preview, và **half-page `ctrl+d/u`**
-> (`max(1, bodyH/2)`, D3) đã có. `J`/`K` viết hoa bị xoá (pane-focus D13) — fine
-> scroll giờ là `j/k` khi focus preview, không còn phím viết hoa. **Còn lại** cho
-> PRD này: D1 (wheel notch `±1`, hiện vẫn `±3`) + D5 (hằng `previewLineStep`).
-> Phần dưới mô tả thiết kế gốc của bug; cập nhật D1/D2 wording khi ship nốt wheel.
+> **Ship note (cả ba tầng đã có):** Tầng **wheel ±1/notch** (D1) + hằng
+> `previewLineStep` (D5) ship trong commit `feat(scroll)` — `previewLineStep`
+> const + wheel callers trong `model.go`, test trong `scroll_test.go`. Tầng
+> **fine 1 dòng** (D2) và **half-page `ctrl+d/u`** (`max(1, bodyH/2)`, D3) ship
+> qua [[prd-pane-focus]]: D13 của PRD đó xoá hẳn phím viết hoa `J/K` và D11 route
+> `ctrl+d/u` thành half-page theo pane đang focus — cùng end-state, đạt qua
+> focus-aware key router thay vì một caller tweak rời. Sau pane-focus, fine
+> scroll là `j/k` khi focus preview; không còn phím viết hoa.
 
 ---
 
