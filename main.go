@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -34,34 +35,88 @@ func detectRenderStyle() string {
 	return "light"
 }
 
+// cliArgs is the parsed command line. parseArgs is kept pure (no I/O) so the flag
+// grammar can be unit-tested directly (see split_test.go).
+type cliArgs struct {
+	start       string // directory to explore (default ".")
+	showVersion bool
+	showHelp    bool
+	split       bool
+	splitDir    string // "right" | "below" (default "right")
+}
+
+// parseArgs interprets os.Args[1:]. Unknown flags are a hard error rather than
+// being treated as a directory — explicit beats a late "not a directory" stat.
+func parseArgs(args []string) (cliArgs, error) {
+	out := cliArgs{start: ".", splitDir: "right"}
+	sawPositional := false
+	for _, a := range args {
+		switch {
+		case a == "--version" || a == "-v" || a == "version":
+			out.showVersion = true
+		case a == "--help" || a == "-h" || a == "help":
+			out.showHelp = true
+		case a == "--split":
+			out.split = true
+		case strings.HasPrefix(a, "--split="):
+			out.split = true
+			dir := strings.TrimPrefix(a, "--split=")
+			if dir != "right" && dir != "below" {
+				return out, fmt.Errorf("invalid --split value %q (want right or below)", dir)
+			}
+			out.splitDir = dir
+		case strings.HasPrefix(a, "-"):
+			return out, fmt.Errorf("unknown flag %q", a)
+		default:
+			if sawPositional {
+				return out, fmt.Errorf("unexpected argument %q (only one DIR allowed)", a)
+			}
+			out.start = a
+			sawPositional = true
+		}
+	}
+	return out, nil
+}
+
+// printHelp documents the CLI. buildVersion is the ldflags-stamped release version
+// (see telemetry.go).
+func printHelp() {
+	fmt.Println("Usage: lazyexplorer [DIR] [--split[=right|below]]")
+	fmt.Println("  DIR                   directory to explore (defaults to current working directory)")
+	fmt.Println("  --split[=right|below] open a split pane in the current terminal and run there,")
+	fmt.Println("                        leaving this pane untouched (tmux, zellij, WezTerm, Kitty,")
+	fmt.Println("                        Ghostty, iTerm2; default right)")
+	fmt.Println("  --version             print version and exit")
+	fmt.Println("  --help                print this help and exit")
+	fmt.Println()
+	fmt.Println("Keys: q/ctrl+c quit · j/k or ↑↓ move · l/enter open · h/← up")
+	fmt.Println("      d delete · r rename · J/ctrl+d page-down · K/ctrl+u page-up")
+	fmt.Println()
+	fmt.Println("Telemetry (opt-in): LE_TELEMETRY=1 DD_API_KEY=… — see README.md.")
+}
+
 func main() {
+	args, err := parseArgs(os.Args[1:])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "lazyexplorer:", err)
+		os.Exit(2)
+	}
+
+	// Short non-TUI commands resolved before anything else so packagers (Homebrew
+	// formula test do block, debian postinst, etc.) can probe the binary without
+	// driving the alt-screen. version/help win over --split.
+	if args.showVersion {
+		fmt.Println("lazyexplorer", buildVersion)
+		return
+	}
+	if args.showHelp {
+		printHelp()
+		return
+	}
+
 	// Root = the directory lazyexplorer is launched in. It is the jail:
 	// navigation can descend below it but never above.
-	start := "."
-	if len(os.Args) > 1 {
-		// Short non-TUI commands resolved here so packagers (Homebrew formula
-		// test do block, debian postinst, etc.) can probe the binary without
-		// driving the alt-screen. buildVersion is the ldflags-stamped release
-		// version (see telemetry.go).
-		switch os.Args[1] {
-		case "--version", "-v", "version":
-			fmt.Println("lazyexplorer", buildVersion)
-			return
-		case "--help", "-h", "help":
-			fmt.Println("Usage: lazyexplorer [DIR]")
-			fmt.Println("  DIR       directory to explore (defaults to current working directory)")
-			fmt.Println("  --version print version and exit")
-			fmt.Println("  --help    print this help and exit")
-			fmt.Println()
-			fmt.Println("Keys: q/ctrl+c quit · j/k or ↑↓ move · l/enter open · h/← up")
-			fmt.Println("      d delete · r rename · J/ctrl+d page-down · K/ctrl+u page-up")
-			fmt.Println()
-			fmt.Println("Telemetry (opt-in): LE_TELEMETRY=1 DD_API_KEY=… — see README.md.")
-			return
-		}
-		start = os.Args[1]
-	}
-	root, err := filepath.Abs(start)
+	root, err := filepath.Abs(args.start)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "lazyexplorer:", err)
 		os.Exit(1)
@@ -69,6 +124,20 @@ func main() {
 	if info, err := os.Stat(root); err != nil || !info.IsDir() {
 		fmt.Fprintln(os.Stderr, "lazyexplorer: not a directory:", root)
 		os.Exit(1)
+	}
+
+	// --split is a launcher mode: detect the terminal, open a split pane running
+	// lazyexplorer there, then exit — leaving the calling pane (often an agent)
+	// untouched. It short-circuits BEFORE InitTelemetry so a spawn-and-exit is not
+	// recorded as a phantom session (D7). On any failure (no supported terminal,
+	// spawn errored) we warn and fall through to a normal run in the current pane,
+	// so --split never leaves the user empty-handed (docs/prd-split-respawn.md D8/D9).
+	if args.split {
+		if err := spawnSplit(args.splitDir, root); err != nil {
+			fmt.Fprintln(os.Stderr, "lazyexplorer --split:", err)
+		} else {
+			return
+		}
 	}
 
 	// Telemetry is wired BEFORE newModel so the model's initial reload (which
