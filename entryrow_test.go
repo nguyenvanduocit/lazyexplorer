@@ -6,9 +6,10 @@ package main
 // Two layers under test:
 //   * fitRow(name, size, w) — pure helper: place name left, size right (one
 //     space minimum between), or drop size and truncate name when too narrow.
-//   * renderEntryRow(e, w, active) — composes fitRow with theme styling and
-//     the caret column, the *single* place a row is drawn for both list pane
-//     and folder preview, so the two panes can never drift in format.
+//   * renderEntryRow(e, w, active) — composes fitRow with theme styling, the
+//     *single* place a row is drawn for both list pane and folder preview, so
+//     the two panes can never drift in format. The cursor row in the list pane
+//     is marked by cursorActiveStyle's full-width accent background (no glyph).
 
 import (
 	"os"
@@ -115,20 +116,17 @@ func TestFitRowCJKWidth(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// renderEntryRow — composes fitRow with theme + caret column
+// renderEntryRow — composes fitRow with theme styling
 // ----------------------------------------------------------------------------
 
-// TestRenderEntryRowDirInactive: a directory inactive row shows name+"/", is
-// styled with dirStyle (we detect by checking colDir in the ANSI), and starts
-// with the two-space caret slot.
+// TestRenderEntryRowDirInactive: a directory inactive row shows name+"/" and
+// is styled with dirStyle (we detect by checking colDir in the ANSI). The row
+// starts flush-left at column 0 of the pane.
 func TestRenderEntryRowDirInactive(t *testing.T) {
 	got := renderEntryRow(entry{name: "src", isDir: true}, 20, false)
 	plain := ansi.Strip(got)
-	if !strings.HasPrefix(plain, "  ") {
-		t.Errorf("inactive row must start with the 2-col caret slot; got %q", plain)
-	}
-	if !strings.Contains(plain, "src/") {
-		t.Errorf("dir name must show trailing '/'; got %q", plain)
+	if !strings.HasPrefix(plain, "src/") {
+		t.Errorf("inactive dir row must start flush-left with the name; got %q", plain)
 	}
 	if !strings.Contains(got, dirColorANSI(t)) {
 		t.Errorf("dir row should carry dirStyle foreground %q; got %q", dirColorANSI(t), got)
@@ -182,15 +180,15 @@ func TestRenderEntryRowFileSizeMutedInactive(t *testing.T) {
 	}
 }
 
-// TestRenderEntryRowActiveCaretAndWidth: an active row starts with the caret
-// "▶ ", carries cursorActiveStyle's accent background, and renders at exactly
-// w columns (cursorActiveStyle.Width(w) pads the row so the highlight covers
-// the whole pane width — same behaviour as the existing renderList).
-func TestRenderEntryRowActiveCaretAndWidth(t *testing.T) {
+// TestRenderEntryRowActiveFullWidthHighlight: an active row carries
+// cursorActiveStyle's accent background and renders at exactly w columns
+// (cursorActiveStyle.Width(w) pads the row so the highlight covers the whole
+// pane width). The full-width accent background IS the cursor marker.
+func TestRenderEntryRowActiveFullWidthHighlight(t *testing.T) {
 	got := renderEntryRow(entry{name: "main.go", isDir: false, size: 100}, 30, true)
 	plain := ansi.Strip(got)
-	if !strings.HasPrefix(plain, "▶ ") {
-		t.Errorf("active row must start with caret; got %q", plain)
+	if !strings.HasPrefix(plain, "main.go") {
+		t.Errorf("active row must start flush-left with the name; got %q", plain)
 	}
 	if w := lipgloss.Width(got); w != 30 {
 		t.Errorf("active row width = %d, want 30 (full pane highlight); got %q", w, got)
@@ -213,10 +211,8 @@ func TestRenderEntryRowInactiveDoesNotForcePad(t *testing.T) {
 // TestRenderEntryRowConsistencyAcrossPanes is the CORE invariant of the PRD:
 // for the same entry, list pane (active=false) and folder preview (also
 // active=false at G002) must produce byte-identical output. The only allowed
-// difference is the caret — and the caret only appears when active=true.
-// Until G002 wires folder preview through this routine, this test still
-// guarantees that two inactive calls match — the contract that G002 will lean
-// on.
+// difference is cursorActiveStyle's accent background on the cursor row —
+// applied only when active=true. Two inactive calls must match exactly.
 func TestRenderEntryRowConsistencyAcrossPanes(t *testing.T) {
 	e := entry{name: "main.go", isDir: false, size: 4242}
 	a := renderEntryRow(e, 40, false)
@@ -252,30 +248,40 @@ func TestRenderListShowsFileSize(t *testing.T) {
 	}
 }
 
-// TestRenderListCaretOnCursorRow keeps the existing behaviour: the cursor row
-// in the list pane is marked with "▶ ". This is the one allowed visual
-// difference between list pane and folder preview (D5/FR4).
-func TestRenderListCaretOnCursorRow(t *testing.T) {
+// TestRenderListHighlightsCursorRow proves the cursor row is visually
+// distinguished from the rest of the list pane by the full-width
+// cursorActiveStyle accent background — the only cursor marker (D5/FR4
+// under the borderless-divider rewrite). The folder-preview pane
+// never carries the active style, so counting accent-bg-bearing rows in the
+// raw View() output isolates the cursor row uniquely.
+func TestRenderListHighlightsCursorRow(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, dir, "a.txt", "x")
 	mustWrite(t, dir, "b.txt", "y")
 
 	m := modelAt(t, dir, 100, 30) // cursor on a.txt (first file, dirs-first, alpha)
-	plain := ansi.Strip(m.View().Content)
+	out := m.View().Content
+	plain := ansi.Strip(out)
 
-	if !strings.Contains(plain, "▶ a.txt") {
-		t.Errorf("cursor row should carry caret '▶ '; got:\n%s", plain)
+	// Cursor row must read "a.txt..." somewhere in the plain output.
+	if !strings.Contains(plain, "a.txt") {
+		t.Errorf("cursor row should carry the file name; got:\n%s", plain)
 	}
-	// Other rows must NOT have the caret.
-	rows := strings.Split(plain, "\n")
-	caretRows := 0
+	// And exactly one rendered row should carry the cursorActiveStyle accent
+	// background (the cursor row). The other list rows + the preview pane
+	// never apply cursorActiveStyle, so the count is the single source of
+	// truth for "one cursor".
+	accentBg := accentBgANSI(t)
+	rows := strings.Split(out, "\n")
+	highlighted := 0
 	for _, r := range rows {
-		if strings.Contains(r, "▶") {
-			caretRows++
+		if strings.Contains(r, accentBg) {
+			highlighted++
 		}
 	}
-	if caretRows != 1 {
-		t.Errorf("exactly one row should carry a caret; got %d:\n%s", caretRows, plain)
+	if highlighted != 1 {
+		t.Errorf("exactly one row should carry the cursorActiveStyle accent bg; got %d:\n%s",
+			highlighted, plain)
 	}
 }
 

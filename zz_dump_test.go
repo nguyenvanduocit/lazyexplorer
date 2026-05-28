@@ -77,8 +77,10 @@ func TestDumpFrames(t *testing.T) {
 //	Frame A — width=120, height=30, .md selected: rendered markdown fills the
 //	          right pane; no border surrounds either pane; a single dim │
 //	          separates the two panes with one space of padding on each side.
-//	Frame B — width=60, height=24, plain file selected: the divider still
-//	          shows 3 cols, panes don't overflow the terminal, content fits.
+//	Frame B — width=80, height=24, plain file selected: at the minimum
+//	          horizontal-mode width (= widthBreakpoint, the responsive trigger
+//	          sits below this), the 3-col divider still renders and panes
+//	          don't overflow.
 //
 // Run with:
 //
@@ -122,8 +124,10 @@ func TestDumpMiddleDividerFrames(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Frame B: 60x24, plain text file selected.
-	mB := modelAt(t, dir, 60, 24)
+	// Frame B: 80x24, plain text file selected. 80 = widthBreakpoint, the
+	// minimum horizontal-mode width post-responsive layout (any narrower flips
+	// to 1-col stacked — exercised separately in TestDumpResponsiveFrames).
+	mB := modelAt(t, dir, 80, 24)
 	mB.renderStyle = "dark"
 	for i, e := range mB.entries {
 		if e.name == "notes.txt" {
@@ -131,7 +135,83 @@ func TestDumpMiddleDividerFrames(t *testing.T) {
 		}
 	}
 	mB.refreshPreview()
-	if err := os.WriteFile(filepath.Join(outDir, "divider-B-plain-60x24.ansi"), []byte(mB.View().Content), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(outDir, "divider-B-plain-80x24.ansi"), []byte(mB.View().Content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestDumpResponsiveFrames is the visual-verdict harness for
+// docs/prd-responsive-layout.md §6 checklist 12. It writes two ANSI frames to
+// $LAZYEXPLORER_DUMP_DIR so an external tool (freeze / vhs) can render them
+// to images and an agent (oh-my-claudecode:visual-verdict) can check them
+// against the design intent:
+//
+//	Frame H — width=120, height=30, .md selected: 2-col side-by-side, list
+//	          on the left, 3-col " │ " divider, rendered markdown on the
+//	          right; status bar at the last row.
+//	Frame V — width=70, height=30, .md selected: 1-col stacked, list pane on
+//	          top (rows = topInner ≈ 9 at default topRatio=0.33), 1-row "─"
+//	          divider strip across the full width, rendered markdown preview
+//	          below filling the rest; status bar at the last row.
+//
+// Both frames share the same fixture (markdown + plain text + sub-folder) so
+// only the terminal size drives the layout difference — the visual verdict
+// can focus on "did the orientation flip correctly" without confounding it
+// with content variance.
+//
+// Run with:
+//
+//	LAZYEXPLORER_DUMP_DIR=/tmp/le-responsive go test -run TestDumpResponsiveFrames .
+func TestDumpResponsiveFrames(t *testing.T) {
+	outDir := os.Getenv("LAZYEXPLORER_DUMP_DIR")
+	if outDir == "" {
+		t.Skip("set LAZYEXPLORER_DUMP_DIR to dump View() frames for visual verdict")
+	}
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Shared fixture: a markdown file is the most discriminating preview for
+	// both orientations (width reflow shows up clearly in glamour's wrapping).
+	dir := t.TempDir()
+	md := "# Responsive Layout\n\nlazyexplorer adapts the pane layout to the\nterminal width: side-by-side when there is room,\nstacked when the user splits the screen narrow.\n\n## How\n\n- Width >= 80 → 2-col side-by-side\n- Width < 80 → 1-col stacked (list above, preview below)\n- The divider drag-target works on both axes\n\n> No keybind, no mode, no config — the layout follows the screen.\n"
+	if err := os.WriteFile(filepath.Join(dir, "doc.md"), []byte(md), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	plain := strings.Repeat("the quick brown fox jumps over the lazy dog\n", 30)
+	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte(plain), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Frame H: 120x30, horizontal 2-col, markdown selected + rendered.
+	mH := modelAt(t, dir, 120, 30)
+	mH.renderStyle = "dark"
+	for i, e := range mH.entries {
+		if e.name == "doc.md" {
+			mH.cursor = i
+		}
+	}
+	mH.refreshPreview()
+	mH.renderNow()
+	if err := os.WriteFile(filepath.Join(outDir, "responsive-H-md-120x30.ansi"), []byte(mH.View().Content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Frame V: 70x30, vertical 1-col stacked, markdown selected + rendered.
+	// At width=70 < widthBreakpoint=80, layout flips to vertical.
+	mV := modelAt(t, dir, 70, 30)
+	mV.renderStyle = "dark"
+	for i, e := range mV.entries {
+		if e.name == "doc.md" {
+			mV.cursor = i
+		}
+	}
+	mV.refreshPreview()
+	mV.renderNow()
+	if err := os.WriteFile(filepath.Join(outDir, "responsive-V-md-70x30.ansi"), []byte(mV.View().Content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }

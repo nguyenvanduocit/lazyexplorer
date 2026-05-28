@@ -35,9 +35,20 @@ func TestIsMarkdown(t *testing.T) {
 // modelAt builds a model rooted at dir with a known terminal size, loaded.
 // Markdown is NOT styled yet: rendering is async (off the Update goroutine), so
 // a test that wants the styled result calls m.renderNow() after this.
+//
+// Mirrors newModel's defaults — including topRatio: 0.33 — so tests built on
+// modelAt see the same vertical-mode geometry the program ships with. Direct
+// struct construction (instead of calling newModel) avoids reload() touching
+// any cwd the test didn't ask about, which is why this helper exists in the
+// first place.
 func modelAt(t *testing.T, dir string, width, height int) model {
 	t.Helper()
-	m := model{root: dir, cwd: dir, leftRatio: 0.38, width: width, height: height, tel: noopRecorder{}}
+	m := model{
+		root: dir, cwd: dir,
+		leftRatio: 0.38, topRatio: 0.33,
+		width: width, height: height,
+		tel: noopRecorder{},
+	}
 	m.reload()
 	return m
 }

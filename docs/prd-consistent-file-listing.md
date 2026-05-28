@@ -15,7 +15,8 @@ lệch nhau ở format:
 
 - **List pane** — `renderList` (`view.go:147-179`): dir → `name + "/"` tô `dirStyle`;
   file → name tô `fileStyle`, size tô `dimStyle` (muted, D8/FR9); hàng active →
-  prefix `▶ ` + `cursorActiveStyle` (mute không áp — accent bg đè mọi fg). **Không icon.**
+  full-width `cursorActiveStyle` accent highlight phủ toàn hàng (mute không áp —
+  accent bg đè mọi fg). **Không icon, không glyph marker.**
 - **Folder preview** — `previewDir` (`fs.go:150-167`): dir → `📁 name/` (emoji, plain
   text); file → `   name  <size>` (**có size**, plain text). **Không palette, không caret.**
 
@@ -29,7 +30,8 @@ hai bộ mặt → bất nhất, và mỗi lần đổi format list phải sửa
 
 Nội dung một folder trông y hệt nhau dù hiển thị ở list pane hay ở folder preview, vì cả
 hai vẽ qua **một routine `renderEntryRow` duy nhất** — khác biệt duy nhất được phép là
-caret đánh dấu hàng đang chọn (chỉ list pane mới có).
+full-width `cursorActiveStyle` accent highlight đánh dấu hàng đang chọn (chỉ list pane
+mới có).
 
 **Non-goal làm rõ:** KHÔNG thêm panel/mode/keybind. KHÔNG biến preview thành pane thứ hai
 có cursor riêng (vi phạm "two panels là trần" trong `CLAUDE.md`). KHÔNG đổi sort order
@@ -43,7 +45,7 @@ có cursor riêng (vi phạm "two panels là trần" trong `CLAUDE.md`). KHÔNG 
 | D2 | Routine chung | một `renderEntryRow(e, w, active)` ở `view.go`, dùng cho **cả** list pane lẫn folder preview | Rule 3: một nguồn render → không drift, đổi format một chỗ áp cả hai |
 | D3 | File size | hiện ở **cả hai** pane — list pane **thêm** cột size (hiện chưa có) | user chọn; cùng routine thì cùng thông tin |
 | D4 | Phân biệt dir/file | **style + trailing `/`**, KHÔNG emoji ở cả hai pane | khớp list pane hiện tại; emoji là chrome thừa, ngược tối giản lazygit-style |
-| D5 | Đánh dấu hàng chọn | caret `▶` + `cursorActiveStyle` **chỉ** ở list pane; preview không marker | preview không có cursor riêng (Non-goal); đây là khác biệt được phép duy nhất |
+| D5 | Đánh dấu hàng chọn | full-width `cursorActiveStyle` accent highlight **chỉ** ở list pane; preview không marker | preview không có cursor riêng (Non-goal); highlight phủ toàn hàng là affordance đủ rõ, không cần thêm glyph marker |
 | D6 | Tương tác preview | **giữ** click-to-navigate (`previewClick`, `model.go:381-423`) | tính năng đang có, read-only + click nhẹ; bỏ đi là regression |
 | D7 | Nguồn dữ liệu folder preview | lưu `m.previewEntries []entry`, **render at view-time**, KHÔNG thêm cache machinery kiểu markdown | folder row chỉ style + `fitWidth` (không wrap/parse) → rẻ; cache-by-width của markdown giải bài toán glamour-wrap mà folder không có |
 | D8 | Styling cột size (file, inactive) | tô `dimStyle` (muted), **không** `fileStyle` | glance UI — mắt cần landing trên `name` trước; bytes là supporting metadata, không phải headline. Hàng active **giữ** style cũ (cursor accent đè toàn fg, dim trên accent unreadable) |
@@ -51,14 +53,15 @@ có cursor riêng (vi phạm "two panels là trần" trong `CLAUDE.md`). KHÔNG 
 ## 4. Functional requirements
 
 - **FR1** — Folder listing ở list pane và ở folder preview đi qua **cùng** `renderEntryRow`;
-  output một hàng cho cùng một `entry` giống hệt nhau ở hai pane, trừ caret (D5).
+  output một hàng cho cùng một `entry` giống hệt nhau ở hai pane, trừ hàng cursor ở list
+  pane vốn mang `cursorActiveStyle` accent highlight (D5).
 - **FR2** — Dir hiển thị `name + "/"` tô `dirStyle`; file hiển thị `name` tô `fileStyle`;
   **không** emoji ở cả hai pane (D4). `..` tổng hợp ở list pane vẫn là dir, không thêm `/`
   (giữ hành vi `renderList` hiện tại, `view.go:158`).
 - **FR3** — Size người-đọc-được (`humanSize`, `fs.go:214`) hiển thị cho **file** ở **cả
   hai** pane; dir không hiện size (D3).
-- **FR4** — Hàng đang chọn ở list pane có caret `▶` + `cursorActiveStyle`; folder preview
-  **không** vẽ marker nào (D5).
+- **FR4** — Hàng đang chọn ở list pane mang full-width `cursorActiveStyle` accent
+  highlight; folder preview **không** vẽ marker nào (D5).
 - **FR5** — Folder preview vẫn click-to-navigate: click một hàng trong preview → vào folder
   + đặt cursor lên item đó, đúng end-state như descend từ list pane (`previewClick` giữ, D6).
 - **FR6** — Truncation nhất quán: khi `name` rộng hơn chỗ trống, cắt + `…` giống nhau hai
@@ -87,8 +90,10 @@ Nguồn sự thật duy nhất cho format một hàng listing. List pane và fol
 
 ```go
 // renderEntryRow vẽ một hàng entry ở bề rộng w cột, giống hệt nhau ở mọi pane.
-// active = true chỉ ở hàng cursor của list pane (caret + highlight); preview luôn false.
-// Format: caret(2 cột) + name(+"/" nếu dir) tô style + size phải-căn cho file.
+// active = true chỉ ở hàng cursor của list pane (full-width accent highlight là
+// duy nhất marker); preview luôn false.
+// Format: name(+"/" nếu dir) tô style + size phải-căn cho file. Hàng vẽ flush-left
+// ở cột 0 của pane — không có glyph slot.
 // Inactive file: name tô fileStyle, size tô dimStyle (muted, D8/FR9).
 func renderEntryRow(e entry, w int, active bool) string {
     name := e.name
@@ -101,13 +106,13 @@ func renderEntryRow(e entry, w int, active bool) string {
         size = humanSize(e.size)
     }
     if active {
-        return cursorActiveStyle.Width(w).Render("▶ " + fitRow(name, size, w-2))
+        return cursorActiveStyle.Width(w).Render(fitRow(name, size, w))
     }
     if e.isDir {
-        return "  " + dirStyle.Render(fitRow(name, "", w-2))
+        return dirStyle.Render(fitRow(name, "", w))
     }
     // Inactive file: name + size styled riêng để mute cột size.
-    return "  " + styleFileRow(name, size, w-2)
+    return styleFileRow(name, size, w)
 }
 ```
 
@@ -127,9 +132,9 @@ trống — D8/FR9. Khi `active`, style nền phủ cả size nên size nằm tr
 ### 5.2 List pane gọi routine chung (`view.go`)
 
 `renderList` (`view.go:147-179`) thay vòng tự-format bằng việc gọi `renderEntryRow` mỗi
-hàng visible, `active = (i == m.cursor)`. Logic scroll (`listTopFor`) + chừa caret giữ
-nguyên; chỉ phần dựng chuỗi hàng được thay bằng routine chung. List pane nhờ đó **thêm
-cột size** (D3/FR3) tự động.
+hàng visible, `active = (i == m.cursor)`. Logic scroll (`listTopFor`) giữ nguyên; chỉ
+phần dựng chuỗi hàng được thay bằng routine chung. List pane nhờ đó **thêm cột size**
+(D3/FR3) tự động, và hàng cursor mang highlight phủ toàn pane width.
 
 ### 5.3 Folder preview lưu entries, render at view-time (`model.go` + `fs.go`)
 
@@ -279,7 +284,7 @@ Feature: Consistent file listing across the list pane and the folder preview
 1. Đặt cursor lên một folder → preview liệt kê nội dung **không** emoji, dir có `/`, file
    có size, màu dir/file khớp y list pane bên trái.
 2. So sánh trực tiếp: cũng folder đó, một hàng dir và một hàng file trông byte-giống nhau ở
-   hai pane, chỉ list pane mới có caret `▶` ở hàng cursor.
+   hai pane, chỉ list pane mới có hàng cursor được phủ `cursorActiveStyle` accent highlight.
 3. List pane (regression có chủ đích): file giờ hiện size; name dài + size vẫn không tràn
    panel, không vỡ frame.
 4. Folder rỗng → cùng placeholder hai pane.

@@ -86,8 +86,16 @@ type model struct {
 	input     string // buffer for rename
 	statusMsg string
 
-	leftRatio float64 // left panel width as a fraction of total; drag-adjustable
-	dragging  bool    // true while the user is dragging the panel divider
+	leftRatio float64 // left panel width as a fraction of total (2-col mode); drag-adjustable along X
+	topRatio  float64 // top panel height as a fraction of total body rows (1-col stacked mode); drag-adjustable along Y, mirror of leftRatio
+	dragging  bool    // true while the user is dragging the panel divider (either axis)
+
+	// lastVertical caches the previous layout()'s orientation (m.width <
+	// widthBreakpoint) for one purpose only: detecting a mode flip during
+	// Update's WindowSizeMsg case so an in-flight drag can be cancelled
+	// before the axis changes under the user's finger. NOT a hysteresis
+	// state — single threshold at v1 (D6, PRD §5.11).
+	lastVertical bool
 
 	width  int
 	height int
@@ -108,7 +116,7 @@ func newModel(root string, tel Recorder) model {
 	if tel == nil {
 		tel = noopRecorder{}
 	}
-	m := model{root: root, cwd: root, leftRatio: 0.38, tel: tel}
+	m := model{root: root, cwd: root, leftRatio: 0.38, topRatio: 0.33, tel: tel}
 	m.reload()
 	return m
 }
@@ -301,10 +309,22 @@ func (m *model) refreshPreview() {
 	}
 }
 
-// previewBodyWidth returns the content columns of the right panel, matching the
-// rightInner width View() renders into, so a renderer wraps to the real draw area.
+// previewBodyWidth returns the content columns of the preview pane at the
+// current layout. In 2-col side-by-side mode it is g.rightInner (preview is
+// the right pane). In 1-col stacked mode preview spans the full m.width
+// (borderless, no chrome to subtract) — leftInner is populated to m.width
+// for both panes in vertical layout, so the same field serves here too.
+//
+// A renderer (markdown/code) wraps to this width; when the orientation
+// changes (resize across widthBreakpoint), the returned value changes, and
+// syncPreview re-dispatches because m.srcWidth no longer matches. That is
+// what makes FR7 (markdown reflow on mode flip) work with no extra code in
+// the render pipeline.
 func (m model) previewBodyWidth() int {
 	g := m.layout()
+	if g.vertical {
+		return g.leftInner // = m.width in vertical mode
+	}
 	return g.rightInner
 }
 
@@ -437,7 +457,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		// Width is now known (or changed) — the tail syncPreview renders the
-		// deferred markdown / reflows it to the new width.
+		// deferred preview / reflows it to the new width.
+		//
+		// Drag-mid-flip handling (PRD §5.11, FR8): if the responsive trigger
+		// just flipped orientation (e.g. user shrank a 2-col session below 80
+		// cols), the active drag's axis is about to swap under the user's
+		// finger. Clear m.dragging BEFORE updating m.lastVertical so the tail
+		// syncPreview (which gates re-render on `!m.dragging`) sees the cleaned
+		// state on this very tick — not one frame late.
+		newVertical := m.width < widthBreakpoint
+		if newVertical != m.lastVertical {
+			m.dragging = false
+		}
+		m.lastVertical = newVertical
 	case tea.MouseMsg:
 		if m.mode != modeNormal { // ignore mouse while in a prompt
 			return m, nil
@@ -474,42 +506,77 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // release / motion / wheel) rather than an Action field, so we switch on the
 // concrete type; e holds the shared cursor data (button + position).
 //
-// The divider's 3 cols are a "no-pane" zone: a left-press anywhere in them
+// The divider is a "no-pane" zone: a left-press anywhere in its hit-zone
 // starts a drag (wider hit-zone is the whole point of the padding — PRD
-// FR4/D5), a wheel over them noops (FR9), and a left-click without drag
-// intent on the status row noops (FR7). All other clicks route to list or
-// preview by the e.X &lt; dividerStart split.
+// FR4/D5), a wheel over it noops (FR9), and a left-click without drag intent
+// on the status row noops (FR7). All other clicks route to list or preview by
+// an axis-appropriate `overList` split.
+//
+// Orientation comes from g.vertical (single source of truth via layout()):
+//
+//   - HORIZONTAL — divider band is 3 cols [dividerStart, dividerStart+dividerWidth);
+//     overList = e.X < dividerStart; drag tracks the X axis (setLeftFromX);
+//     list pane height is g.bodyH.
+//
+//   - VERTICAL — divider band is 3 rows centred on dividerYStart (one glyph row
+//
+//   - dividerHitRowsAbove above + dividerHitRowsBelow below); overList = e.Y <
+//     dividerYStart; drag tracks the Y axis (setTopFromY); list pane height is
+//     g.topInner.
 func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	g := m.layout()
 	e := msg.Mouse()
-	overDivider := e.X >= g.dividerStart && e.X < g.dividerStart+dividerWidth
+
+	// overDivider: hit-zone band of the divider in the current orientation.
+	// In horizontal mode the band coincides exactly with the visible 3 cols.
+	// In vertical mode the visible strip is 1 row but the hit-zone widens
+	// to ±dividerHitRowsAbove/Below — same affordance as horizontal's 3 cols
+	// without spending screen rows on a painted pad row.
+	var overDivider bool
+	if g.vertical {
+		overDivider = e.Y >= g.dividerYStart-dividerHitRowsAbove &&
+			e.Y <= g.dividerYStart+dividerHeight-1+dividerHitRowsBelow
+	} else {
+		overDivider = e.X >= g.dividerStart && e.X < g.dividerStart+dividerWidth
+	}
 
 	switch msg.(type) {
 	case tea.MouseMotionMsg:
-		// Divider drag in progress: track the cursor column.
+		// Divider drag in progress: track the cursor on the active axis. The
+		// drag-start branch below picked the axis based on g.vertical at press
+		// time; motion just continues that same axis here.
 		if m.dragging {
-			m.setLeftFromX(e.X)
+			if g.vertical {
+				m.setTopFromY(e.Y)
+			} else {
+				m.setLeftFromX(e.X)
+			}
 		}
 		return m, nil
 
 	case tea.MouseReleaseMsg:
 		m.dragging = false
-		// Reflow to the divider's new width happens in Update's tail syncPreview
-		// now that dragging is false (it was deferred during the drag motions).
+		// Reflow to the divider's new dimensions happens in Update's tail
+		// syncPreview now that dragging is false (deferred during motion).
 		return m, nil
 
 	case tea.MouseWheelMsg:
-		// Wheel over the divider is a noop — neither pane owns those cols, so
-		// spinning over the visual separator must not jump the list cursor or
-		// scroll the preview (FR9). Without this guard the e.X &lt; dividerStart
-		// split would route divider-col wheel events into the list pane.
+		// Wheel over the divider is a noop (FR9). Without this guard, the
+		// axis-aware overList split below would route divider-zone wheel
+		// events into the list pane (horizontal: divider cols; vertical:
+		// divider band rows).
 		if overDivider {
 			return m, nil
 		}
-		overLeft := e.X < g.dividerStart
+		overList := false
+		if g.vertical {
+			overList = e.Y < g.dividerYStart
+		} else {
+			overList = e.X < g.dividerStart
+		}
 		switch e.Button {
 		case tea.MouseWheelUp:
-			if overLeft {
+			if overList {
 				if m.cursor > 0 {
 					m.cursor--
 					m.refreshPreview()
@@ -518,7 +585,7 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				m.scrollPreview(-3)
 			}
 		case tea.MouseWheelDown:
-			if overLeft {
+			if overList {
 				if m.cursor < len(m.entries)-1 {
 					m.cursor++
 					m.refreshPreview()
@@ -530,14 +597,18 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseClickMsg:
-		// Divider drag start: a left-press anywhere in the divider's 3 cols
-		// (pad-left, glyph, pad-right) starts a drag and snaps the glyph to
-		// the clicked col. Excluding the status row (m.height-1) means a
-		// click on the status text under the divider's X range doesn't
-		// accidentally start a drag.
+		// Divider drag start: a left-press anywhere in the divider's hit-zone
+		// starts a drag and snaps the glyph to the cursor (col in horizontal,
+		// row in vertical). Excluding the status row (m.height-1) means a
+		// click on the status text whose X/Y happens to fall in the divider
+		// band doesn't accidentally start a drag.
 		if e.Button == tea.MouseLeft && e.Y < m.height-1 && overDivider {
 			m.dragging = true
-			m.setLeftFromX(e.X)
+			if g.vertical {
+				m.setTopFromY(e.Y)
+			} else {
+				m.setLeftFromX(e.X)
+			}
 			return m, nil
 		}
 		if e.Button != tea.MouseLeft {
@@ -549,13 +620,20 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		if overDivider {
 			return m, nil
 		}
-		overLeft := e.X < g.dividerStart
-		if !overLeft {
+		overList := false
+		listH := g.bodyH
+		if g.vertical {
+			overList = e.Y < g.dividerYStart
+			listH = g.topInner
+		} else {
+			overList = e.X < g.dividerStart
+		}
+		if !overList {
 			m.previewClick(e.Y, g) // click a name in a folder listing → open + select it
 			return m, nil
 		}
 		row := e.Y - g.firstRow
-		if row < 0 || row >= g.bodyH {
+		if row < 0 || row >= listH {
 			return m, nil
 		}
 		idx := g.listTop + row
@@ -585,6 +663,19 @@ func (m *model) setLeftFromX(x int) {
 	m.leftRatio = float64(x) / float64(m.width)
 }
 
+// setTopFromY is setLeftFromX's Y-axis mirror for the 1-col stacked layout:
+// row y becomes dividerYStart, so topRatio = y / bodyH (no +1 — the
+// post-borderless semantics treat the cursor row directly as the divider row,
+// same discipline as setLeftFromX). Stored as a ratio so the split stays
+// proportional across terminal height resizes (topInnerHeight does the clamp).
+func (m *model) setTopFromY(y int) {
+	bodyH := max(m.height-1, 3)
+	if bodyH <= 0 {
+		return
+	}
+	m.topRatio = float64(y) / float64(bodyH)
+}
+
 // scrollPreview moves the right-panel viewport by delta lines, clamped to
 // range. The length comes from previewLen so a folder listing (entries) and
 // a file preview (lines) share the same scroll math — no branch needed here.
@@ -609,9 +700,13 @@ func (m *model) previewClick(y int, g geometry) {
 	}
 
 	top, bodyH := m.previewScroll()
-	row := y - g.firstRow
+	// previewFirstRow is 0 in horizontal mode (preview starts at body top) and
+	// g.topInner+dividerHeight in vertical mode (preview starts after the list
+	// pane + the horizontal divider strip). Branching is centralised in
+	// layout(); previewClick stays orientation-agnostic.
+	row := y - g.previewFirstRow
 	if row < 0 || row >= bodyH {
-		return // panel border or the status row below — not a listing row
+		return // outside the preview pane (status row, divider, or list pane area)
 	}
 
 	// The listing rows map 1:1, in order, to m.previewEntries (no synthetic

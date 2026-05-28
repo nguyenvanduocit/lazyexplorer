@@ -45,9 +45,14 @@ func TestPreviewResizeNoOverflow(t *testing.T) {
 
 	// Invariant: render at a width/height that previously overflowed and assert
 	// the frame fits the screen — no row past the terminal width (would wrap),
-	// no more rows than the terminal is tall (would scroll).
+	// no more rows than the terminal is tall (would scroll). width=100 keeps
+	// the test in 2-col side-by-side mode (>= widthBreakpoint=80, so layout()
+	// returns horizontal geometry); the original width=50 stress no longer
+	// fits inside horizontal mode under the responsive trigger — narrower
+	// terminals flip to 1-col stacked which is a separate code path tested
+	// elsewhere.
 	m := model{
-		width: 50, height: 14, leftRatio: 0.38,
+		width: 100, height: 14, leftRatio: 0.38,
 		root: dir, cwd: dir,
 		entries: []entry{{name: "deep.go", size: fi.Size()}},
 		cursor:  0,

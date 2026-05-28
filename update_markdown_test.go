@@ -116,6 +116,60 @@ func TestUpdateNavigationDispatchesRender(t *testing.T) {
 	}
 }
 
+// TestUpdateRedispatchesRenderOnResponsiveModeFlip is the FR7 contract: when a
+// markdown render is current at one orientation's preview width and the user
+// resizes through widthBreakpoint, previewBodyWidth changes, the cached
+// m.srcWidth no longer matches, and the tail syncPreview dispatches a fresh
+// render at the new width. The gen-counter inside applyPreview drops any
+// stale in-flight render. Without this the preview pane would render at the
+// old (wrong) width after the flip, leaving torn ANSI on the resized frame.
+func TestUpdateRedispatchesRenderOnResponsiveModeFlip(t *testing.T) {
+	dir := t.TempDir()
+	src := "# Heading\n\nbody **text** here\n"
+	if err := os.WriteFile(filepath.Join(dir, "doc.md"), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Land at horizontal mode (width=100) and complete the first render so the
+	// model carries m.srcWidth = previewBodyWidth(horizontal) = g.rightInner = 60.
+	var m tea.Model = newModel(dir, noopRecorder{})
+	m, cmd := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m, _ = m.Update(markdownFromCmd(t, cmd))
+	mm := m.(model)
+	if !mm.previewPreStyled {
+		t.Fatalf("setup: preview not styled after horizontal render")
+	}
+	if mm.srcWidth != 60 {
+		t.Fatalf("setup: srcWidth = %d, want 60 (= g.rightInner at width=100)", mm.srcWidth)
+	}
+
+	// Shrink below widthBreakpoint → vertical mode. previewBodyWidth becomes
+	// m.width = 70 (full pane in 1-col stacked, borderless). The new width is
+	// !=  m.srcWidth, so the tail syncPreview must hand back a render Cmd.
+	m, cmd = m.Update(tea.WindowSizeMsg{Width: 70, Height: 24})
+	mm = m.(model)
+	if !mm.lastVertical {
+		t.Fatalf("after shrink to 70: lastVertical = false, want true (mode should flip)")
+	}
+	if mm.pendingWidth != 70 {
+		t.Errorf("after mode flip: pendingWidth = %d, want 70 (re-render at vertical full width)", mm.pendingWidth)
+	}
+	if !strings.Contains(mm.View().Content, "rendering") {
+		t.Error("rendering chip should reappear while the post-flip render is in flight")
+	}
+
+	// Drive the new render to completion and confirm the preview is restyled
+	// at the new width.
+	m, _ = m.Update(markdownFromCmd(t, cmd))
+	mm = m.(model)
+	if !mm.previewPreStyled {
+		t.Error("preview should be styled again after the post-flip render lands")
+	}
+	if mm.srcWidth != 70 {
+		t.Errorf("after post-flip render: srcWidth = %d, want 70", mm.srcWidth)
+	}
+}
+
 // TestConcurrentMarkdownRendersAreSafe is the empirical guard behind resolving the
 // render style from a passed-in name: fast navigation spawns many render Cmds that
 // the runtime executes on separate goroutines. renderMarkdown builds its style from
