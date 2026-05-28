@@ -9,7 +9,14 @@
 <meta property="og:type" content="website" />
 <meta property="og:title" content="lazyexplorer — a terminal file explorer for the vibe-code workflow" />
 <meta property="og:description" content="A lazygit-style terminal file explorer. Live-refreshing, jailed to your project, keyboard + mouse. Go + Bubble Tea." />
-<!-- TODO: og:image (1200x630). charmbracelet/vhs can record the real TUI for this. -->
+<meta property="og:url" content="https://lazyexplorer.aiocean.dev/" />
+<meta property="og:image" content="https://lazyexplorer.aiocean.dev/media/og.png" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="lazyexplorer — a terminal file explorer for the vibe-code workflow" />
+<meta name="twitter:description" content="A lazygit-style terminal file explorer. Live-refreshing, jailed to your project, keyboard + mouse. Go + Bubble Tea." />
+<meta name="twitter:image" content="https://lazyexplorer.aiocean.dev/media/og.png" />
 
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23F1ECE1'/%3E%3Cpath d='M12 9l9 7-9 7z' fill='%231A1714'/%3E%3C/svg%3E" />
 
@@ -28,13 +35,9 @@
     --rule:     rgba(26, 23, 20, 0.22);
     --rule-2:   rgba(26, 23, 20, 0.10);
 
-    /* terminal palette — verbatim from theme.go, scoped to .terminal only */
-    --t-accent: #7D56F4;
-    --t-accent2:#9B7DF9;
-    --t-dir:    #56B6F4;
+    /* dim text in the terminal window chrome (the title bar). Every other colour
+       now lives inside the recorded video — the real software — not in CSS. */
     --t-dim:    #6C757D;
-    --t-fg:     #E6E6E6;
-    --t-status: #1E1E2E;
 
     --disp: 'Fraunces', Georgia, serif;
     --serif:'Newsreader', Georgia, serif;
@@ -172,36 +175,18 @@
   }
   figcaption b { color: var(--ink); }
 
-  /* terminal interior — faithful to the running TUI (palette from theme.go) */
+  /* terminal window chrome — the title bar drawn above each recording */
   .term-bar { display: flex; align-items: center; gap: 8px; padding: 11px 15px; border-bottom: 1px solid rgba(255,255,255,0.07); background: #0C0C13; }
   .term-bar .lights { display: flex; gap: 7px; }
   .term-bar .lights i { width: 11px; height: 11px; border-radius: 50%; }
   .term-bar .lights i:nth-child(1){ background:#FF5F57 } .term-bar .lights i:nth-child(2){ background:#FEBC2E } .term-bar .lights i:nth-child(3){ background:#28C840 }
   .term-bar .ttl { flex: 1; text-align: center; font-family: var(--mono); font-size: 12px; color: var(--t-dim); }
 
-  .tui { text-align: left; font-family: var(--mono); font-size: 13.5px; line-height: 1.7; padding: 14px 16px 0; color: var(--t-fg); }
-  @media (max-width: 560px){ .tui { font-size: 11px; padding: 10px 10px 0; } }
-  .tui-title { padding: 2px 4px 10px; white-space: nowrap; overflow: hidden; }
-  .tui-title b { color: var(--t-accent2); font-weight: 700; }
-  .tui-title .p { color: var(--t-dim); }
-  .panes { display: flex; align-items: stretch; }
-  .pane { border: 1px solid var(--t-dim); border-radius: 8px; padding: 7px 2px; min-height: 232px; }
-  .pane.list { width: 38%; border-color: var(--t-accent); }
-  .pane.preview { width: 62%; margin-left: 8px; }
-  .row { padding: 0 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .row .folder { color: var(--t-dir); font-weight: 700; }
-  .row.cursor { background: var(--t-accent); color: #fff; font-weight: 700; border-radius: 3px; }
-  .row.incoming { max-height: 0; opacity: 0; overflow: hidden; animation: incoming 7s ease-in-out infinite; }
-  .row.incoming .nb { color: #28C840; font-size: 11px; margin-left: 6px; }
-  @keyframes incoming { 0%,32%{max-height:0;opacity:0} 44%,100%{max-height:1.7em;opacity:1} }
-  .pane.preview .ph { color: var(--t-dim); padding: 0 10px 6px; }
-  .pane.preview .h1 { color: var(--t-accent2); font-weight: 700; padding: 0 10px; }
-  .pane.preview .tx, .pane.preview .li { color: #C8CAD3; padding: 0 10px; }
-  .pane.preview .li b { color: var(--t-fg); }
-  @media (max-width:560px){ .pane.preview .tx,.pane.preview .li{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis } }
-  .tui-status { margin: 10px -16px 0; padding: 6px 16px; background: var(--t-status); color: #ADB5BD; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .tui-status b { color: var(--t-accent2); }
-  @media (max-width:560px){ .tui-status{ font-size:10px; margin:8px -10px 0; padding:6px 10px } }
+  /* the recorded TUI itself — real software captured with vhs. The figframe +
+     term-bar chrome wrap it; the video carries the only colour on the page. */
+  .rec-video { display: block; width: 100%; height: auto; background: #07070B; }
+  .entry figure.fig { margin: 20px 0 6px; }
+  .entry .figframe { box-shadow: 7px 7px 0 var(--paper-2), 8px 8px 0 var(--ink); }
 
   /* ───────────── Prose (why) ───────────── */
   .prose p { font-size: clamp(21px, 2.6vw, 27px); line-height: 1.5; max-width: 30ch; }
@@ -262,7 +247,6 @@
   .reveal.in { opacity: 1; transform: none; }
   @media (prefers-reduced-motion: reduce) {
     .rise, .reveal { opacity: 1; transform: none; animation: none; transition: none; }
-    .row.incoming { animation: none; max-height: 1.7em; opacity: 1; }
     html { scroll-behavior: auto; }
   }
 </style>
@@ -309,38 +293,18 @@
     <figure class="fig rise" style="animation-delay:.5s">
       <div class="figframe">
         <div class="term-bar"><div class="lights"><i></i><i></i><i></i></div><div class="ttl">~/acme-api — lazyexplorer</div></div>
-        <div class="tui">
-          <div class="tui-title"><b>lazyexplorer</b><span class="p">&nbsp;&nbsp;/acme-api</span></div>
-          <div class="panes">
-            <div class="pane list">
-              <div class="row"><span class="folder">src/</span></div>
-              <div class="row"><span class="folder">docs/</span></div>
-              <div class="row">go.mod</div>
-              <div class="row">main.go</div>
-              <div class="row">model.go</div>
-              <div class="row incoming">auth_handler.go<span class="nb">+ new</span></div>
-              <div class="row">view.go</div>
-              <div class="row cursor">▶ README.md</div>
-            </div>
-            <div class="pane preview">
-              <div class="ph">markdown · 2.1&nbsp;KB</div>
-              <div class="h1"># acme-api</div>
-              <div class="tx">A small HTTP service. This preview is glamour-</div>
-              <div class="tx">rendered — headings, lists and code read like</div>
-              <div class="tx">prose, not a raw dump.</div>
-              <div class="li">&nbsp;</div>
-              <div class="li">• <b>live</b> — updates as the agent works</div>
-              <div class="li">• <b>jailed</b> — never above the project root</div>
-              <div class="li">• <b>fast</b> — one poll, gated on real change</div>
-            </div>
-          </div>
-          <div class="tui-status">[<b>↑↓/jk/click</b>] move&nbsp; [<b>enter/l</b>] open&nbsp; [<b>h/bksp</b>] up&nbsp; [<b>r</b>] rename&nbsp; [<b>d</b>] delete&nbsp; [<b>wheel</b>] scroll&nbsp; [<b>q</b>] quit</div>
-        </div>
+        <video class="rec-video" autoplay loop muted playsinline preload="metadata"
+               poster="media/hero-poster.webp"
+               aria-label="lazyexplorer open beside a coding agent. The agent writes auth_handler.go and then its test; both files appear in the list on their own, while the cursor never leaves README.md and its rendered preview holds still.">
+          <source src="media/hero.webm" type="video/webm" />
+          <source src="media/hero.mp4" type="video/mp4" />
+        </video>
       </div>
       <figcaption>
-        <b>Fig. 1</b> — the two-pane view. Left: the project, jailed to its root. Right: a live
-        preview of the selection. A new file from the agent (<b>auth_handler.go</b>) slides in;
-        the cursor stays on <b>README.md</b>, matched by name.
+        <b>Fig. 1</b> — the two-pane view, recorded live. Left: the project tree, jailed to its
+        root. Right: the selection, rendered (here <b>README.md</b>, through glamour). An agent
+        writes <b>auth_handler.go</b> and then its test — both land in the list on their own,
+        while the cursor never leaves README.md, matched by name, not by position.
       </figcaption>
     </figure>
    </div>
@@ -373,49 +337,68 @@
       <article class="entry reveal">
         <h3><span class="no">01</span>Live refresh</h3>
         <p>
-          Polls the directory once a second and rebuilds only when something actually changed.
-          When your agent adds, edits, or deletes a file it appears at once — and your cursor
-          stays on the file you were reading, matched by <i>name</i>, not by position. Delete the
+          Polls the project once a second and rebuilds only when the bytes actually change. The
+          moment your agent adds, edits, or deletes a file, it shows up — no keypress. Your cursor
+          stays on the file you were reading, matched by <i>name</i>, not by position; delete the
           folder you're standing in and it climbs to the nearest surviving parent instead of breaking.
         </p>
         <div class="demo"><span class="ink">+ auth_handler.go</span>   ← appears, cursor stays put
-<span class="ink">~ model.go</span>          ← edited by the agent, picked up</div>
+<span class="ink">+ auth_handler_test.go</span>   ← and its test, a beat later</div>
       </article>
 
       <article class="entry reveal">
-        <h3><span class="no">02</span>Jailed to your project</h3>
+        <h3><span class="no">02</span>Previews that read well</h3>
         <p>
-          Launch it in a directory and that becomes the ceiling. Dive into subfolders freely,
-          but never wander above the project root — so it stays scoped to exactly what the agent
-          is editing, and a stray keypress can't walk you into <span class="mono">/etc</span>.
+          Markdown is rendered through <span class="mono">glamour</span> — headings, lists, tables,
+          inline code. Source is syntax-highlighted through <span class="mono">chroma</span>.
+          Directories show as listings. One pane, every file type, read the way it's meant to be —
+          without opening a thing. Long lines scroll sideways, or press <span class="mono">w</span> to wrap.
         </p>
-        <div class="demo"><span class="ink">acme-api/</span>          ← root (the jail)
-<span class="ink">  src/handlers/</span>   ← descend freely
-..                  ⚠ at root — cannot go higher</div>
+        <figure class="fig">
+          <div class="figframe">
+            <div class="term-bar"><div class="lights"><i></i><i></i><i></i></div><div class="ttl">~/acme-api — preview</div></div>
+            <video class="rec-video" autoplay loop muted playsinline preload="metadata"
+                   poster="media/previews-poster.webp"
+                   aria-label="Moving the cursor onto main.go shows it as syntax-highlighted Go; onto README.md shows it rendered as Markdown; onto a folder shows a file listing.">
+              <source src="media/previews.webm" type="video/webm" />
+              <source src="media/previews.mp4" type="video/mp4" />
+            </video>
+          </div>
+        </figure>
       </article>
 
       <article class="entry reveal">
-        <h3><span class="no">03</span>Previews that read well</h3>
+        <h3><span class="no">03</span>Find <span style="font-family:var(--mono);font-size:.6em;vertical-align:.18em;color:var(--ink-soft)">&amp;</span> act fast</h3>
         <p>
-          Markdown is rendered, not dumped — headings, lists, and code blocks come through with
-          styling. Source files are shown as source, directories as listings. Glance at a file's
-          contents in the right pane without ever opening it.
+          Press <span class="mono">/</span> to fuzzy-find any file in the tree, however deep, and
+          jump straight to it. Press <span class="mono">ctrl+p</span> for the command palette —
+          reload, <b>copy the selected path</b> (to paste into the agent's chat), or
+          <span class="mono">cd</span> anywhere inside the jail. The two moves you reach for most,
+          a keystroke away.
         </p>
-        <div class="demo"><span class="ink"># Heading</span>           rendered, not raw
-markdown / code      syntax-aware
-12 items             folder listing</div>
+        <figure class="fig">
+          <div class="figframe">
+            <div class="term-bar"><div class="lights"><i></i><i></i><i></i></div><div class="ttl">~/acme-api — find &amp; act</div></div>
+            <video class="rec-video" autoplay loop muted playsinline preload="metadata"
+                   poster="media/search-poster.webp"
+                   aria-label="Typing slash and a few letters jumps to a deeply nested file; ctrl+p opens the command palette and copies the selected file's absolute path.">
+              <source src="media/search.webm" type="video/webm" />
+              <source src="media/search.mp4" type="video/mp4" />
+            </video>
+          </div>
+        </figure>
       </article>
 
       <article class="entry reveal">
-        <h3><span class="no">04</span>Keyboard <span style="font-family:var(--mono);font-size:.6em;vertical-align:.18em;color:var(--ink-soft)">+</span> mouse</h3>
+        <h3><span class="no">04</span>Lives in the pane beside your agent</h3>
         <p>
-          lazygit-style keys for the keyboard crowd — <span class="mono">j/k</span> to move,
-          <span class="mono">enter</span> to open, <span class="mono">h</span> to go up. Or reach
-          for the mouse: click a row, click a folder again to open it, drag the divider, scroll
-          with the wheel, click a breadcrumb to jump. Both work, always.
+          Run it with <span class="mono">--split</span> and it opens a pane right next to the one
+          you're in — <span class="mono">tmux</span>, <span class="mono">zellij</span>, WezTerm,
+          Kitty, Ghostty, or iTerm2 — then runs there and leaves your prompt free. The file tree
+          ends up exactly where you want it: alongside the agent, not on top of it.
         </p>
-        <div class="demo">▶ <span class="ink">src/</span>   click ─ select · click again ─ open
-│◀▶│    drag the divider to resize panes</div>
+        <div class="demo"><span class="ink">$ lazyexplorer --split</span>        ← a pane to the right
+<span class="ink">$ lazyexplorer --split=below</span>  ← or stacked underneath</div>
       </article>
     </div>
   </section>
@@ -454,18 +437,25 @@ markdown / code      syntax-aware
       <div class="listing">
         <div class="lh"><span>usage</span><button class="txtbtn" data-copy="#cb-usage" style="text-transform:none;letter-spacing:.04em">[ copy ]</button></div>
 <pre id="cb-usage"><span class="pr">$ </span>cd your-project
-<span class="pr">$ </span>lazyexplorer            <span class="cm"># explore the current directory</span>
-<span class="pr">$ </span>lazyexplorer ./docs     <span class="cm"># or point it somewhere — that becomes the root</span>
-<span class="pr">$ </span>lazyexplorer --version  <span class="cm"># print version and exit</span></pre>
+<span class="pr">$ </span>lazyexplorer             <span class="cm"># explore the current directory</span>
+<span class="pr">$ </span>lazyexplorer ./docs      <span class="cm"># or point it somewhere — that becomes the root</span>
+<span class="pr">$ </span>lazyexplorer --split     <span class="cm"># open in a split pane beside this one</span>
+<span class="pr">$ </span>lazyexplorer --version   <span class="cm"># print version and exit</span></pre>
       </div>
 
       <div class="keys">
         <div class="kh">Key reference</div>
-        <div class="keyrow"><span class="ks"><kbd>j</kbd><kbd>k</kbd><kbd>↑</kbd><kbd>↓</kbd></span><span class="kd">move the cursor</span></div>
+        <div class="keyrow"><span class="ks"><kbd>j</kbd><kbd>k</kbd><kbd>↑</kbd><kbd>↓</kbd></span><span class="kd">move the cursor — or scroll, when the preview is focused</span></div>
+        <div class="keyrow"><span class="ks"><kbd>g</kbd><kbd>G</kbd></span><span class="kd">jump to top / bottom</span></div>
         <div class="keyrow"><span class="ks"><kbd>enter</kbd><kbd>l</kbd><kbd>→</kbd></span><span class="kd">open folder</span></div>
         <div class="keyrow"><span class="ks"><kbd>h</kbd><kbd>bksp</kbd><kbd>←</kbd></span><span class="kd">go up a level (stops at the root)</span></div>
-        <div class="keyrow"><span class="ks"><kbd>g</kbd><kbd>G</kbd></span><span class="kd">jump to top / bottom</span></div>
-        <div class="keyrow"><span class="ks"><kbd>J</kbd><kbd>K</kbd><kbd>^d</kbd><kbd>^u</kbd></span><span class="kd">scroll the preview</span></div>
+        <div class="keyrow"><span class="ks"><kbd>tab</kbd></span><span class="kd">switch focus between the list and the preview</span></div>
+        <div class="keyrow"><span class="ks"><kbd>^d</kbd><kbd>^u</kbd></span><span class="kd">half-page down / up in the preview</span></div>
+        <div class="keyrow"><span class="ks"><kbd>H</kbd><kbd>L</kbd><kbd>0</kbd><kbd>w</kbd></span><span class="kd">scroll the preview sideways · reset · toggle wrap</span></div>
+        <div class="keyrow"><span class="ks"><kbd>/</kbd></span><span class="kd">fuzzy-find a file anywhere in the tree</span></div>
+        <div class="keyrow"><span class="ks"><kbd>^p</kbd></span><span class="kd">command palette (reload, copy path, cd)</span></div>
+        <div class="keyrow"><span class="ks"><kbd>?</kbd></span><span class="kd">full key help</span></div>
+        <div class="keyrow"><span class="ks"><kbd>esc</kbd></span><span class="kd">back — close search, palette, or help</span></div>
         <div class="keyrow"><span class="ks"><kbd>r</kbd></span><span class="kd">rename the selected entry</span></div>
         <div class="keyrow"><span class="ks"><kbd>d</kbd></span><span class="kd">delete (with y / n confirm)</span></div>
         <div class="keyrow"><span class="ks"><kbd>q</kbd><kbd>^c</kbd></span><span class="kd">quit</span></div>
@@ -508,6 +498,15 @@ markdown / code      syntax-aware
     es.forEach(function (e) { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } });
   }, { threshold: 0.12 });
   document.querySelectorAll('.reveal').forEach(function (el) { io.observe(el); });
+
+  // Respect prefers-reduced-motion: don't autoplay the recordings. The poster
+  // frame stands in, and controls let a viewer start playback on their own terms.
+  if (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    document.querySelectorAll('video.rec-video').forEach(function (v) {
+      v.removeAttribute('autoplay'); v.removeAttribute('loop');
+      v.setAttribute('controls', ''); v.pause();
+    });
+  }
 
   document.getElementById('yr').textContent = new Date().getFullYear();
 </script>
