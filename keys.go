@@ -27,6 +27,16 @@ type KeyMap struct {
 	PreviewJumpTop,
 	PreviewJumpBottom key.Binding
 
+	// Preview horizontal scroll + wrap (focusPreview, nowrap plain/code). h/l
+	// share key codes with GoUp/OpenEntry — dispatch routes by focusPane, so
+	// these two carry help text only; H/L/0/w are real, unique-code bindings.
+	PreviewScrollLeft,
+	PreviewScrollRight,
+	PreviewHScrollHalfLeft,
+	PreviewHScrollHalfRight,
+	PreviewHScrollReset,
+	PreviewToggleWrap key.Binding
+
 	// Mutation (normal mode + focusList)
 	Rename,
 	Delete key.Binding
@@ -63,6 +73,13 @@ func defaultKeyMap() KeyMap {
 		PreviewHalfPageDown: key.NewBinding(key.WithKeys("ctrl+d"), key.WithHelp("ctrl+d", "half page down")),
 		PreviewJumpTop:      key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "preview top")),
 		PreviewJumpBottom:   key.NewBinding(key.WithKeys("G"), key.WithHelp("G", "preview bottom")),
+
+		PreviewScrollLeft:       key.NewBinding(key.WithKeys("h", "left"), key.WithHelp("h", "scroll left")),
+		PreviewScrollRight:      key.NewBinding(key.WithKeys("l", "right"), key.WithHelp("l", "scroll right")),
+		PreviewHScrollHalfLeft:  key.NewBinding(key.WithKeys("H"), key.WithHelp("H", "scroll ½ left")),
+		PreviewHScrollHalfRight: key.NewBinding(key.WithKeys("L"), key.WithHelp("L", "scroll ½ right")),
+		PreviewHScrollReset:     key.NewBinding(key.WithKeys("0"), key.WithHelp("0", "scroll reset")),
+		PreviewToggleWrap:       key.NewBinding(key.WithKeys("w"), key.WithHelp("w", "toggle wrap")),
 
 		Rename: key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "rename")),
 		Delete: key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete")),

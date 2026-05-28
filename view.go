@@ -7,6 +7,7 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // geometry holds the screen layout derived purely from terminal size + cursor.
@@ -426,6 +427,12 @@ func (m model) previewLen() int {
 	if m.previewIsDir {
 		return len(m.previewEntries)
 	}
+	// In wrap mode the vertical scroller iterates the wrapped visual lines; in
+	// nowrap (and before any reflow) it iterates the logical lines directly —
+	// previewDisplay equals m.preview in nowrap, so this is the same count.
+	if m.previewWrap && m.previewDisplay != nil {
+		return len(m.previewDisplay)
+	}
 	return len(m.preview)
 }
 
@@ -475,18 +482,163 @@ func (m model) renderPreview(w int) string {
 		return strings.Join(lines, "\n")
 	}
 
-	var lines []string
-	for i := top; i < len(m.preview) && i < top+bodyH; i++ {
-		line := m.preview[i]
-		// Markdown lines carry ANSI from glamour and are already wrapped to w;
-		// fitWidth's rune-slicing would corrupt the escape sequences, so skip it.
-		if !m.previewPreStyled {
-			line = fitWidth(line, w)
+	// Non-scrollable previews (markdown via glamour, image/placeholder lines):
+	// markdown carries ANSI already wrapped to width → render verbatim; plain
+	// placeholders get fitWidth. No horizontal window (nothing overflows).
+	if !m.previewScrollable {
+		var lines []string
+		for i := top; i < len(m.preview) && i < top+bodyH; i++ {
+			line := m.preview[i]
+			if !m.previewPreStyled {
+				line = fitWidth(line, w)
+			}
+			lines = append(lines, line)
 		}
-		lines = append(lines, line)
+		return strings.Join(lines, "\n")
 	}
-	return strings.Join(lines, "\n")
+
+	// Scrollable preview (plain text or code).
+	if m.previewWrap {
+		// Wrapped: previewDisplay holds the hard-wrapped visual lines, each ≤ w.
+		var lines []string
+		for i := top; i < len(m.previewDisplay) && i < top+bodyH; i++ {
+			line := m.previewDisplay[i]
+			if !hasANSI(line) { // plain wrapped line → rune-fit; code carries ANSI → verbatim
+				line = fitWidth(line, w)
+			}
+			lines = append(lines, line)
+		}
+		return strings.Join(lines, "\n")
+	}
+
+	// Nowrap: a horizontal window over the logical lines + ‹/› edge indicators.
+	end := min(top+bodyH, len(m.preview))
+	return m.renderHWindow(m.preview[top:end], w)
 }
+
+// renderHWindow renders nowrap scrollable lines: each is sliced to the window
+// [previewHScroll, previewHScroll+contentW) with ‹/› edge indicators. The
+// indicator columns are reserved by a GLOBAL condition (does any visible line
+// overflow that side?) so content width is uniform across lines and code stays
+// column-aligned instead of jittering line to line (D9).
+func (m model) renderHWindow(visible []string, w int) string {
+	left := m.previewHScroll
+	showLeft := left > 0
+
+	provW := w
+	if showLeft {
+		provW--
+	}
+	anyRightCut := false
+	for _, line := range visible {
+		if lineWidth(line)-left > provW {
+			anyRightCut = true
+			break
+		}
+	}
+
+	contentW := w
+	if showLeft {
+		contentW--
+	}
+	if anyRightCut {
+		contentW--
+	}
+	if contentW < 1 {
+		contentW = 1 // degenerate narrow pane: best effort
+	}
+
+	var out []string
+	for _, line := range visible {
+		var b strings.Builder
+		if showLeft {
+			b.WriteString(dimStyle.Render("‹"))
+		}
+		b.WriteString(hSlice(line, left, contentW))
+		if anyRightCut {
+			if lineWidth(line)-left > contentW {
+				b.WriteString(dimStyle.Render("›"))
+			} else {
+				b.WriteByte(' ') // reserved column, this line not cut
+			}
+		}
+		out = append(out, b.String())
+	}
+	return strings.Join(out, "\n")
+}
+
+// hSlice extracts display columns [left, left+width) from a line: ANSI-aware for
+// code (TruncateLeft drops the left cols preserving SGR, then Truncate caps the
+// right), rune-aware for plain (CJK width via lipgloss.Width).
+func hSlice(line string, left, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if hasANSI(line) {
+		return ansi.Truncate(ansi.TruncateLeft(line, left, ""), width, "")
+	}
+	r := []rune(line)
+	r = r[runePrefixWidth(r, left):]
+	return string(r[:runePrefixWidth(r, width)])
+}
+
+// runePrefixWidth returns the count of leading runes whose cumulative display
+// width is ≤ w (CJK/wide-glyph aware). Used to slice plain lines on column
+// boundaries.
+func runePrefixWidth(r []rune, w int) int {
+	if w <= 0 {
+		return 0
+	}
+	acc, n := 0, 0
+	for _, c := range r {
+		cw := lipgloss.Width(string(c))
+		if acc+cw > w {
+			break
+		}
+		acc += cw
+		n++
+	}
+	return n
+}
+
+// wrapLine hard-wraps one preview line to w columns → ≥1 visual lines. Code
+// lines carry ANSI → ANSI-aware hard-wrap so escape sequences survive the split;
+// plain lines → rune-slice (CJK-aware). An empty line yields one empty visual
+// line so blank rows are preserved.
+func wrapLine(line string, w int) []string {
+	if w <= 0 || line == "" {
+		return []string{line}
+	}
+	if hasANSI(line) {
+		return strings.Split(ansi.Hardwrap(line, w, false), "\n")
+	}
+	var out []string
+	r := []rune(line)
+	for len(r) > 0 {
+		cut := runePrefixWidth(r, w)
+		if cut == 0 { // a single glyph wider than w: emit it alone to make progress
+			cut = 1
+		}
+		out = append(out, string(r[:cut]))
+		r = r[cut:]
+	}
+	if len(out) == 0 {
+		out = []string{""}
+	}
+	return out
+}
+
+// lineWidth is the display-column width of a (possibly ANSI) line.
+func lineWidth(line string) int {
+	if hasANSI(line) {
+		return ansi.StringWidth(line)
+	}
+	return lipgloss.Width(line)
+}
+
+// hasANSI reports whether a line carries an escape sequence (code/markdown) and
+// so must be handled ANSI-aware rather than rune-sliced.
+func hasANSI(s string) bool { return strings.Contains(s, "\x1b") }
 
 // renderStatus is the footer: either a mode prompt or the keybind hints.
 func (m model) renderStatus() string {
@@ -651,11 +803,18 @@ func (m model) shortHelp() []key.Binding {
 			km.CommandPalette, km.FullHelp, km.Quit,
 		}
 	}
-	return []key.Binding{
-		km.PreviewScrollDown, km.FocusToggle, km.PreviewJumpTop, km.PreviewJumpBottom,
-		km.PreviewHalfPageDown, km.Back,
-		km.CommandPalette, km.FullHelp, km.Quit,
+	// focusPreview. For a scrollable preview (plain/code) surface the hscroll +
+	// wrap keys; in wrap mode only the toggle is relevant (FR12). Markdown/image/
+	// folder previews are not scrollable, so those keys are omitted.
+	base := []key.Binding{km.PreviewScrollDown, km.FocusToggle, km.PreviewJumpTop, km.PreviewJumpBottom, km.PreviewHalfPageDown}
+	if m.previewScrollable {
+		if m.previewWrap {
+			base = append(base, km.PreviewToggleWrap)
+		} else {
+			base = append(base, km.PreviewScrollRight, km.PreviewHScrollHalfRight, km.PreviewHScrollReset, km.PreviewToggleWrap)
+		}
 	}
+	return append(base, km.Back, km.CommandPalette, km.FullHelp, km.Quit)
 }
 
 // fullHelp returns the bindings grouped for the help overlay (FR15). Group order
@@ -664,7 +823,7 @@ func (m model) fullHelp() [][]key.Binding {
 	km := m.keymap
 	return [][]key.Binding{
 		{km.MoveUp, km.MoveDown, km.GoTop, km.GoBottom, km.OpenEntry, km.GoUp},
-		{km.PreviewScrollUp, km.PreviewScrollDown, km.PreviewHalfPageUp, km.PreviewHalfPageDown, km.PreviewJumpTop, km.PreviewJumpBottom},
+		{km.PreviewScrollUp, km.PreviewScrollDown, km.PreviewHalfPageUp, km.PreviewHalfPageDown, km.PreviewJumpTop, km.PreviewJumpBottom, km.PreviewScrollLeft, km.PreviewScrollRight, km.PreviewHScrollHalfLeft, km.PreviewHScrollHalfRight, km.PreviewHScrollReset, km.PreviewToggleWrap},
 		{km.Rename, km.Delete},
 		{km.FocusToggle, km.Search, km.CommandPalette, km.FullHelp, km.Back},
 		{km.Quit},

@@ -116,23 +116,28 @@ func TestCodeMultiLineTokenKeepsColor(t *testing.T) {
 	}
 }
 
-// TestRenderCodePreviewTruncates proves FR3: a code line wider than the panel is
-// cut ANSI-aware to the width (chroma does not wrap), so it never overflows.
-func TestRenderCodePreviewTruncates(t *testing.T) {
+// TestRenderCodePreviewKeepsFullWidth proves the horizontal-scroll precondition
+// (prd-horizontal-scroll-preview): a code line wider than the panel is returned
+// FULL (no truncation), so the preview pane can pan across it. The width-fitting
+// happens later in renderPreview's horizontal window, not in the renderer.
+func TestRenderCodePreviewKeepsFullWidth(t *testing.T) {
 	long := "var x = \"" + strings.Repeat("A", 400) + "\"\n"
 	src := "package main\n\n" + long
-	w := 60
-	lines, preStyled, err := renderCodePreview("/tmp/main.go", []byte(src), w, "")
+	lines, preStyled, err := renderCodePreview("/tmp/main.go", []byte(src), 60, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !preStyled {
-		t.Error("code preview must report preStyled=true (verbatim ANSI, skip fitWidth)")
+		t.Error("code preview must report preStyled=true (verbatim ANSI)")
 	}
-	for i, ln := range lines {
-		if lipgloss.Width(ln) > w {
-			t.Errorf("line %d visible width %d exceeds panel width %d — not truncated", i, lipgloss.Width(ln), w)
+	widest := 0
+	for _, ln := range lines {
+		if w := lipgloss.Width(ln); w > widest {
+			widest = w
 		}
+	}
+	if widest <= 60 {
+		t.Errorf("widest code line = %d cols, want > 60 (full width, not truncated — hscroll needs the overflow to pan)", widest)
 	}
 }
 

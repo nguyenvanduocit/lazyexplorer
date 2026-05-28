@@ -21,7 +21,6 @@ import (
 	"github.com/alecthomas/chroma/v2/formatters"
 	"github.com/alecthomas/chroma/v2/lexers"
 	"github.com/alecthomas/chroma/v2/styles"
-	"github.com/charmbracelet/x/ansi"
 	"github.com/nguyenvanduocit/glamour/v2"
 	glamourstyles "github.com/nguyenvanduocit/glamour/v2/styles"
 	gitignore "github.com/sabhiram/go-gitignore"
@@ -453,7 +452,7 @@ func highlightCode(source, name string) ([]string, error) {
 // line is truncated ANSI-aware to the panel width (the escape-safe Truncate keeps
 // the trailing "…" and re-closes the SGR). Output is pre-styled ANSI. style is
 // unused — code uses codeHighlightStyle (the app hint drives only markdown).
-func renderCodePreview(path string, content []byte, width int, _ string) ([]string, bool, error) {
+func renderCodePreview(path string, content []byte, _ int, _ string) ([]string, bool, error) {
 	lines, err := highlightCode(string(content), filepath.Base(path))
 	if err != nil {
 		return nil, false, err
@@ -461,9 +460,10 @@ func renderCodePreview(path string, content []byte, width int, _ string) ([]stri
 	if lines == nil { // defensive: matches() already gated this to real code
 		return plainLines(content), false, nil
 	}
-	for i := range lines {
-		lines[i] = ansi.Truncate(lines[i], width, "…")
-	}
+	// Lines are returned full-width (no truncation): the preview pane windows
+	// them horizontally at render time (renderHWindow / hSlice), which is what
+	// makes horizontal scroll possible (prd-horizontal-scroll-preview). At
+	// hscroll 0 the window shows the same leading columns the old truncation did.
 	return lines, true, nil
 }
 

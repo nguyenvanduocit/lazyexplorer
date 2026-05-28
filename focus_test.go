@@ -454,8 +454,17 @@ func TestStatusChipReflectsFocus(t *testing.T) {
 	if !strings.Contains(prevStatus, "scroll") {
 		t.Errorf("focusPreview hints should offer a 'scroll' binding; got %q", prevStatus)
 	}
-	if !strings.Contains(prevStatus, "esc") {
-		t.Errorf("focusPreview hints should mention 'esc'; got %q", prevStatus)
+	// Back (esc) belongs to the focusPreview shortHelp set. The rendered hint can
+	// truncate it at a given width once the hscroll/wrap bindings are added, so
+	// assert on the binding set rather than the width-clamped string.
+	hasBack := false
+	for _, b := range m.shortHelp() {
+		if b.Help().Key == "esc" {
+			hasBack = true
+		}
+	}
+	if !hasBack {
+		t.Error("focusPreview shortHelp should include the esc/back binding")
 	}
 }
 

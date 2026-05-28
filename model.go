@@ -23,6 +23,11 @@ const pollInterval = time.Second
 // focus-aware route in prd-pane-focus.
 const previewLineStep = 1
 
+// previewColStep is how many columns h/l pan the preview per press — the
+// horizontal mirror of previewLineStep. H/L jump half the pane width
+// (prd-horizontal-scroll-preview D5/D6).
+const previewColStep = 1
+
 // tickMsg drives the poll loop. tickCmd schedules the next one; Init kicks off
 // the first and every tickMsg reschedules, so the loop self-sustains.
 type tickMsg struct{}
@@ -116,6 +121,24 @@ type model struct {
 	// the empty-folder placeholder signal.
 	previewEntries []entry
 	previewIsDir   bool
+
+	// Horizontal scroll + wrap (plain text + code only — prd-horizontal-scroll-preview).
+	// previewScrollable is true when the preview can pan horizontally (plain/code);
+	// false for markdown (glamour already wrapped), images, folders. previewHScroll
+	// is the column offset in nowrap mode; previewWrap toggles soft-wrap (a session
+	// preference, NOT reset per file). The reflow cache (previewDisplay + key fields)
+	// holds the visual lines the vertical scroller iterates: in wrap mode each source
+	// line expands to ≥1 wrapped lines, in nowrap it equals m.preview. previewSrcStart
+	// maps a source line to its first visual line (wrap-toggle position preservation);
+	// previewMaxLineWidth is the widest source line (nowrap hscroll clamp).
+	previewScrollable   bool
+	previewHScroll      int
+	previewWrap         bool
+	previewDisplay      []string
+	previewDisplayW     int
+	previewDisplayWrap  bool
+	previewMaxLineWidth int
+	previewSrcStart     []int
 
 	previewPreStyled bool   // preview lines carry verbatim ANSI (markdown/code) → renderPreview skips fitWidth
 	srcPath          string // abs path of the selected renderable file; "" = selection has no preview renderer
@@ -346,6 +369,15 @@ func (m *model) refreshPreview() {
 	m.srcRaw = nil
 	m.srcWidth = 0
 	m.pendingWidth = 0 // the selection is changing; cancel any in-flight render's claim so syncPreview re-dispatches
+	// Horizontal-scroll reset (prd-horizontal-scroll-preview). New selection →
+	// flush-left + invalidate the reflow cache; only the plain/code branches below
+	// turn previewScrollable back on. previewWrap is NOT reset — it is a session
+	// preference, not per-file state (D15).
+	m.previewScrollable = false
+	m.previewHScroll = 0
+	m.previewDisplay = nil
+	m.previewSrcStart = nil
+	m.previewMaxLineWidth = 0
 	// Folder-preview state defaults OFF, same discipline: every non-dir branch
 	// below leaves it off, only the dir branch turns it on. Skipping this
 	// reset would carry a previous dir's entries into a file preview and
@@ -391,6 +423,9 @@ func (m *model) refreshPreview() {
 	// placeholder, never run the heavy renderer inline (that would freeze Update).
 	if r, ok := rendererFor(sel.name); ok && (r.binary || kind == "text") {
 		m.srcPath = full
+		// Code is horizontally scrollable (long lines pan); markdown wraps via
+		// glamour and images are placeholders — neither pans (FR7/D3).
+		m.previewScrollable = r.name == "code"
 		if r.binary {
 			m.srcRaw = content // raw bytes (image reads the path; content is incidental)
 			m.preview = []string{dimStyle.Render("(rendering " + r.name + "…)")}
@@ -403,9 +438,120 @@ func (m *model) refreshPreview() {
 	// No renderer (or a text renderer facing a binary file) → plain/placeholder.
 	if kind == "text" {
 		m.preview = plainLines(content)
+		m.previewScrollable = true // plain text pans horizontally
 	} else {
 		m.preview = placeholderLines(kind, content, sel.size)
 	}
+}
+
+// reflowPreview rebuilds previewDisplay — the visual lines the vertical scroller
+// iterates — from m.preview, the wrap mode, and the content width. It is the
+// single place wrap-expansion happens, cache-guarded by (width, wrap) so the
+// render path never re-wraps every frame. Folder + markdown + non-scrollable
+// previews don't need it (renderPreview handles them without previewDisplay), so
+// it returns early for them. Called from syncPreview's head (covers nav / resize
+// / drag) and toggleWrap.
+func (m *model) reflowPreview(w int) {
+	if w <= 0 || m.previewIsDir || !m.previewScrollable {
+		return
+	}
+	if m.previewDisplayW == w && m.previewDisplayWrap == m.previewWrap && m.previewDisplay != nil {
+		return // cache hit
+	}
+	m.previewDisplayW = w
+	m.previewDisplayWrap = m.previewWrap
+
+	srcStart := make([]int, len(m.preview))
+	if m.previewWrap {
+		// wrap=true: expand each source line to ≤w visual lines.
+		var out []string
+		for s, line := range m.preview {
+			srcStart[s] = len(out)
+			out = append(out, wrapLine(line, w)...)
+		}
+		m.previewDisplay = out
+		m.previewMaxLineWidth = 0 // no hscroll in wrap mode
+		m.previewSrcStart = srcStart
+		return
+	}
+	// wrap=false: logical lines unchanged (1:1); record the widest for the clamp.
+	m.previewDisplay = m.preview
+	maxW := 0
+	for s, line := range m.preview {
+		srcStart[s] = s
+		if lw := lineWidth(line); lw > maxW {
+			maxW = lw
+		}
+	}
+	m.previewMaxLineWidth = maxW
+	m.previewSrcStart = srcStart
+}
+
+// sourceLineAt returns the source line whose visual block contains visual line v
+// (the largest s with previewSrcStart[s] <= v). visualLineFor is its inverse.
+// Together they let toggleWrap keep the same source line pinned to the viewport
+// top across a wrap flip, so the view doesn't jump to an unrelated line.
+func (m model) sourceLineAt(v int) int {
+	ss := m.previewSrcStart
+	if len(ss) == 0 {
+		return 0
+	}
+	lo, hi := 0, len(ss)-1
+	for lo < hi {
+		mid := (lo + hi + 1) / 2
+		if ss[mid] <= v {
+			lo = mid
+		} else {
+			hi = mid - 1
+		}
+	}
+	return lo
+}
+
+func (m model) visualLineFor(s int) int {
+	ss := m.previewSrcStart
+	if s < 0 || s >= len(ss) {
+		return 0
+	}
+	return ss[s]
+}
+
+// scrollPreviewH pans the preview viewport horizontally by delta columns, clamped
+// to [0, maxHScroll]. maxHScroll is the widest source line minus the content
+// width — when content fits, it is 0 and any pan is a no-op. No-op entirely in
+// wrap mode or for markdown/folder (nothing overflows there).
+func (m *model) scrollPreviewH(delta int) {
+	if m.previewWrap || !m.previewScrollable {
+		return
+	}
+	w := m.previewBodyWidth()
+	maxH := max(0, m.previewMaxLineWidth-max(1, w-2)) // -2 ≈ both edge indicators
+	before := m.previewHScroll
+	m.previewHScroll = min(max(0, m.previewHScroll+delta), maxH)
+	if m.previewHScroll != before {
+		dir := "right"
+		if delta < 0 {
+			dir = "left"
+		}
+		m.tel.Record("action.preview_hscroll", map[string]any{"direction": dir})
+	}
+}
+
+// toggleWrap flips wrap mode while keeping the same SOURCE line at the top of the
+// viewport. previewTop is a visual-line index whose meaning flips logical↔visual
+// on toggle; without re-mapping it, the viewport would jerk to an unrelated line
+// — defeating the "I'm reading this line, wrap it" intent.
+func (m *model) toggleWrap() {
+	if !m.previewScrollable {
+		return
+	}
+	srcAtTop := m.sourceLineAt(m.previewTop)
+	m.previewWrap = !m.previewWrap
+	m.previewHScroll = 0
+	m.reflowPreview(m.previewBodyWidth())
+	m.previewTop = m.visualLineFor(srcAtTop)
+	m.scrollPreview(0) // clamp into range
+	m.tel.Record("action.preview_wrap_toggle", map[string]any{"wrap": m.previewWrap})
 }
 
 // previewBodyWidth returns the content columns of the preview pane at the
@@ -441,6 +587,11 @@ func (m model) previewBodyWidth() int {
 // the same render. The heavy renderer runs inside the returned closure, off the
 // Update goroutine — this is what keeps the UI responsive.
 func (m *model) syncPreview() tea.Cmd {
+	// Keep the wrap/visual-line reflow cache current at the tail of every Update —
+	// this single hook covers navigation (m.preview changed), resize, and divider
+	// drag (preview body width changed). Cache-guarded, so it is a cheap no-op when
+	// nothing relevant changed, and it returns early for non-scrollable previews.
+	m.reflowPreview(m.previewBodyWidth())
 	if m.srcPath == "" {
 		return nil // selection has no renderer
 	}
@@ -513,6 +664,7 @@ func (m *model) applyPreview(msg previewRenderedMsg) {
 		m.preview = plainLines(m.srcRaw)
 		m.previewPreStyled = false
 		m.srcWidth = 0
+		m.reflowPreview(m.previewBodyWidth()) // source fallback is still scrollable; rebuild the cache
 		m.statusMsg = "⚠ preview render failed, showing source"
 
 		// error.render_fail (FR11). errorClass enums the renderer error origin;
@@ -527,7 +679,8 @@ func (m *model) applyPreview(msg previewRenderedMsg) {
 	m.preview = msg.lines
 	m.previewPreStyled = msg.preStyled
 	m.srcWidth = msg.width
-	m.scrollPreview(0) // clamp the viewport into the freshly-sized content
+	m.reflowPreview(m.previewBodyWidth()) // rebuild visual-line cache before the clamp reads previewLen
+	m.scrollPreview(0)                    // clamp the viewport into the freshly-sized content
 
 	// action.preview_rendered (FR10). lines is the rendered line count, NOT
 	// the file's logical line count — backend can correlate against width.
@@ -973,14 +1126,39 @@ func (m model) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// only act when the list is focused (D5/FR5). Under focusPreview they are
 	// no-ops — pressing d while reading a preview is ambiguous, so it does
 	// nothing rather than guess.
-	case key.Matches(msg, km.OpenEntry):
+	case key.Matches(msg, km.OpenEntry): // l/right ≡ PreviewScrollRight in focusPreview
 		if m.focusPane == focusList {
 			m.descend()
+		} else {
+			m.scrollPreviewH(previewColStep) // pan right
 		}
-	case key.Matches(msg, km.GoUp):
+	case key.Matches(msg, km.GoUp): // h/left/backspace ≡ PreviewScrollLeft in focusPreview
 		if m.focusPane == focusList {
 			m.ascend()
+		} else {
+			m.scrollPreviewH(-previewColStep) // pan left
 		}
+
+	// Coarse half-width pan + reset + wrap toggle (focusPreview, plain/code only —
+	// scrollPreviewH/toggleWrap are no-ops otherwise). These keys are unused on the
+	// list, so they only act under focusPreview.
+	case key.Matches(msg, km.PreviewHScrollHalfRight): // L
+		if m.focusPane == focusPreview {
+			m.scrollPreviewH(max(1, m.previewBodyWidth()/2))
+		}
+	case key.Matches(msg, km.PreviewHScrollHalfLeft): // H
+		if m.focusPane == focusPreview {
+			m.scrollPreviewH(-max(1, m.previewBodyWidth()/2))
+		}
+	case key.Matches(msg, km.PreviewHScrollReset): // 0
+		if m.focusPane == focusPreview {
+			m.previewHScroll = 0
+		}
+	case key.Matches(msg, km.PreviewToggleWrap): // w
+		if m.focusPane == focusPreview {
+			m.toggleWrap()
+		}
+
 	case key.Matches(msg, km.Rename):
 		if m.focusPane == focusList && len(m.entries) > 0 && m.entries[m.cursor].name != ".." {
 			m.mode = modeRename
