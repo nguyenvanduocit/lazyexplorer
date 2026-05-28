@@ -22,6 +22,9 @@ dist/
 # Cloudflare Wrangler local cache/state from `wrangler pages` deploys (landing page).
 .wrangler/
 
+# Ruff (Python linter) cache — stray artifact from tooling runs, not part of this Go project.
+.ruff_cache/
+
 # User-local Claude Code config (skills, settings) — lives on the developer's machine,
 # not in the public repo. AGENTS.md (GitNexus index, project-relevant) is committed.
 .claude/
