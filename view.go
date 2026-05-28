@@ -144,9 +144,10 @@ func (m model) renderList(w, h int) string {
 	}
 
 	top := m.listTopFor(h)
+	listFocused := m.focusPane == focusList
 	var b strings.Builder
 	for i := top; i < len(m.entries) && i < top+h; i++ {
-		b.WriteString(renderEntryRow(m.entries[i], w, i == m.cursor))
+		b.WriteString(renderEntryRow(m.entries[i], w, i == m.cursor, listFocused))
 		if i < len(m.entries)-1 && i < top+h-1 {
 			b.WriteByte('\n')
 		}
@@ -155,10 +156,16 @@ func (m model) renderList(w, h int) string {
 }
 
 // renderEntryRow draws ONE listing row at w display columns. It is the single
-// place a row is formatted, so list pane and folder preview (wired up in G002)
-// can never disagree on row format — see docs/prd-consistent-file-listing.md
-// §5.1. active=true marks the cursor row in the list pane (caret + full-width
-// accent highlight). Folder preview will always pass active=false.
+// place a row is formatted, so list pane and folder preview can never disagree
+// on row format — see docs/prd-consistent-file-listing.md §5.1. active=true
+// marks the cursor row in the list pane (caret + full-width highlight). Folder
+// preview always passes active=false.
+//
+// listFocused tunes the cursor-row highlight (D10/FR12): when the list pane
+// holds focus the row uses the accent background; when focus is on the preview
+// the row dims to colDim, so the cursor still shows which file the preview
+// reflects without competing with the focused pane for the accent. listFocused
+// is only consulted on the active row — inactive rows ignore it.
 //
 // Layout:
 //   - 2-col caret slot at the left: "▶ " when active, "  " otherwise.
@@ -166,10 +173,10 @@ func (m model) renderList(w, h int) string {
 //   - file (inactive) → name tô fileStyle (bright headline), humanSize(size)
 //     tô dimStyle (muted supporting info, D8/FR9) — eye lands on the name
 //     first; the bytes column is metadata, not the headline.
-//   - file (active) → whole row uses cursorActiveStyle so name AND size stay
-//     legible on the accent background (a dim foreground on accent would be
-//     unreadable); the mute rule does NOT apply to the cursor row.
-func renderEntryRow(e entry, w int, active bool) string {
+//   - file (active) → whole row uses one style so name AND size stay legible on
+//     the background (a dim foreground on accent would be unreadable); the mute
+//     rule does NOT apply to the cursor row.
+func renderEntryRow(e entry, w int, active, listFocused bool) string {
 	name := e.name
 	if e.isDir && e.name != ".." {
 		name += "/"
@@ -183,8 +190,15 @@ func renderEntryRow(e entry, w int, active bool) string {
 	if active {
 		// cursorActiveStyle.Width(w) pads the rendered string to exactly w
 		// columns so the highlight covers the whole pane width. Plain body
-		// (no per-segment styling) keeps name + size on the same accent fg.
-		return cursorActiveStyle.Width(w).Render("▶ " + fitRow(name, size, w-2))
+		// (no per-segment styling) keeps name + size on the same fg.
+		st := cursorActiveStyle
+		if !listFocused {
+			// Focus is on the preview: keep the cursor visible but soften it to
+			// colDim so the accent stays reserved for the focused pane (D10).
+			// Background returns a copy — cursorActiveStyle is not mutated.
+			st = cursorActiveStyle.Background(colDim)
+		}
+		return st.Width(w).Render("▶ " + fitRow(name, size, w-2))
 	}
 	if e.isDir {
 		// Dirs have no size column → fitRow with empty size returns the bare
@@ -290,7 +304,9 @@ func (m model) renderPreview(w int) string {
 		}
 		var lines []string
 		for i := top; i < len(m.previewEntries) && i < top+bodyH; i++ {
-			lines = append(lines, renderEntryRow(m.previewEntries[i], w, false))
+			// Preview rows are never the list's cursor row → active=false, which
+			// short-circuits the listFocused dim path; pass false for honesty.
+			lines = append(lines, renderEntryRow(m.previewEntries[i], w, false, false))
 		}
 		return strings.Join(lines, "\n")
 	}
@@ -321,10 +337,21 @@ func (m model) renderStatus() string {
 			Render("Rename: " + m.input + "▏")
 		return p
 	default:
-		hints := "[↑↓/jk/click] move  [enter/l] open  [h/bksp] up  [r] rename  [d] delete  [wheel] scroll  [q] quit"
-		status := hints
+		// Focus chip + hints both follow m.focusPane: the chip names the focused
+		// pane (FR11), the hints list only the keys relevant to it. This chip and
+		// the dimmed cursor row are the whole focus signal — the panes are
+		// borderless, so there is no border color to flip.
+		var chip, hints string
+		if m.focusPane == focusList {
+			chip = focusChipStyle.Render(" list ")
+			hints = "[↑↓/jk] move  [tab] focus preview  [enter/l] open  [h/bksp] up  [r] rename  [d] delete  [q] quit"
+		} else {
+			chip = focusChipStyle.Render(" preview ")
+			hints = "[↑↓/jk] scroll  [tab] focus list  [g/G] top/bottom  [ctrl+d/u] half-page  [esc] back  [q] quit"
+		}
+		status := chip + " " + hints
 		if m.statusMsg != "" {
-			status = m.statusMsg + dimStyle.Render("   "+hints)
+			status = chip + " " + m.statusMsg + dimStyle.Render("   "+hints)
 		}
 		// While a markdown render is in flight the preview shows the raw source as
 		// a placeholder; this chip tells the user the styled version is on its way,

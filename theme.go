@@ -34,6 +34,15 @@ var (
 	// Uses the single accent so it draws the eye without adding a new color.
 	renderingStyle = lipgloss.NewStyle().Foreground(colAccent).Bold(true)
 
+	// focusChipStyle is the [ list ] / [ preview ] chip at the head of the
+	// status bar that signals which pane keyboard navigation acts on. Inverted
+	// (accent background) so it pops without adding a new color to the palette —
+	// the same single accent the cursor row and rendering chip use.
+	focusChipStyle = lipgloss.NewStyle().
+			Background(colAccent).
+			Foreground(colSelFg).
+			Bold(true)
+
 	statusBarStyle = lipgloss.NewStyle().
 			Background(lipgloss.Color("#1E1E2E")).
 			Foreground(lipgloss.Color("#ADB5BD")).
