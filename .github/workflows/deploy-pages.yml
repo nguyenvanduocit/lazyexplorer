@@ -1,0 +1,26 @@
+name: Deploy docs to Cloudflare Pages
+
+# Auto-deploy the docs/ landing page to the "lazyexplorer" Pages project
+# on every push to main that touches docs/. workflow_dispatch allows a
+# manual run (used to confirm CI after the CLOUDFLARE_API_TOKEN secret is set).
+on:
+  push:
+    branches: [main]
+    paths: ['docs/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    name: Deploy
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy docs --project-name=lazyexplorer --branch=main
