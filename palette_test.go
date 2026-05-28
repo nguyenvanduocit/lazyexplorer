@@ -327,18 +327,21 @@ func TestSelectedAbsPathDotDot(t *testing.T) {
 	}
 }
 
-// TestPaletteRendersInView: with the palette open, View() shows the prompt in
-// the status bar and the command list (with descriptions) in the preview region.
-func TestPaletteRendersInView(t *testing.T) {
+// TestPaletteBodyRenders: the palette body shows the search prompt at its top
+// and lists every command (name + description). This is the body-level
+// contract; modal composition into View() is covered by
+// TestModalRendersPaletteInView (modal_test.go).
+func TestPaletteBodyRenders(t *testing.T) {
 	m := modelAt(t, t.TempDir(), 120, 30)
 	m, _ = press(t, m, tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
-	out := ansi.Strip(m.View().Content)
-	if !strings.Contains(out, "> ▏") {
-		t.Errorf("palette View should show the '> ▏' prompt; got tail %q", lastLine(out))
+	body := stripANSI(m.renderPaletteBody(56, 16))
+	first := strings.TrimSpace(strings.Split(body, "\n")[0])
+	if !strings.HasPrefix(first, ">") {
+		t.Errorf("palette body row 0 should start with the search prompt '>'; got %q", first)
 	}
 	for _, name := range []string{"reload", "copy path", "cd", "quit"} {
-		if !strings.Contains(out, name) {
-			t.Errorf("palette View should list command %q; full:\n%s", name, out)
+		if !strings.Contains(body, name) {
+			t.Errorf("palette body should list command %q; full:\n%s", name, body)
 		}
 	}
 }

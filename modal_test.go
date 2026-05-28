@@ -97,6 +97,45 @@ func TestOverlayCenteredComposites(t *testing.T) {
 	}
 }
 
+func TestPaletteBodyPromptAtTop(t *testing.T) {
+	m := model{
+		mode:            modeCommandPalette,
+		paletteStage:    0,
+		paletteQuery:    "re",
+		paletteFiltered: defaultCommands(),
+	}
+	body := m.renderPaletteBody(50, 10)
+	first := stripANSI(strings.Split(body, "\n")[0])
+	if !strings.HasPrefix(strings.TrimSpace(first), "> re") {
+		t.Errorf("row 0 = %q, want search prompt '> re…'", first)
+	}
+}
+
+func TestPaletteBodyCdErrorInBox(t *testing.T) {
+	cmds := defaultCommands()
+	m := model{
+		mode:            modeCommandPalette,
+		paletteStage:    1, // cd arg input
+		paletteFiltered: cmds,
+		paletteCursor:   indexOfCmd(cmds, "cd"),
+		statusMsg:       "⚠ blocked: outside root",
+	}
+	body := stripANSI(m.renderPaletteBody(50, 10))
+	if !strings.Contains(body, "⚠ blocked: outside root") {
+		t.Errorf("cd-stage body missing error message:\n%s", body)
+	}
+}
+
+// indexOfCmd returns the position of the named command in cmds (test helper).
+func indexOfCmd(cmds []Command, name string) int {
+	for i, c := range cmds {
+		if c.Name == name {
+			return i
+		}
+	}
+	return 0
+}
+
 // stripANSI removes SGR escapes for plain-text assertions.
 func stripANSI(s string) string {
 	var b strings.Builder

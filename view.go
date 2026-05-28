@@ -767,7 +767,7 @@ func (m model) renderStatus() string {
 func (m model) renderPreviewRegion(w, h int) string {
 	switch m.mode {
 	case modeCommandPalette:
-		return m.renderPalette(w, h)
+		return m.renderPaletteBody(w, h)
 	case modeHelp:
 		return m.renderHelpBody(w, h)
 	default:
@@ -775,25 +775,43 @@ func (m model) renderPreviewRegion(w, h int) string {
 	}
 }
 
-// renderPalette draws the command list (stage 0). In stage 1 (arg input) the
-// prompt itself lives in the status bar, so the pane shows the chosen command's
-// description for context. The cursor row carries the full-width accent
-// highlight — the same cursor marker the list pane uses (no caret glyph).
-func (m model) renderPalette(w, h int) string {
+// renderPaletteBody draws the modal box content: the search/arg prompt at the
+// box top (Raycast-style — the prompt lives in the box, not the status bar),
+// then the filtered command list. In the cd arg stage the body shows the
+// command description plus any submit error (e.g. a jail-block) next to the
+// input the user is correcting.
+func (m model) renderPaletteBody(w, h int) string {
+	var lines []string
+
+	// Row 0: search prompt (stage 0) or cd-arg prompt (stage 1).
+	if m.paletteStage == 0 {
+		lines = append(lines, promptStyle.Background(colAccent).Foreground(colSelFg).
+			Render(fitWidth("> "+m.paletteQuery+"▏", w)))
+	} else {
+		sel := m.paletteFiltered[m.paletteCursor]
+		lines = append(lines, promptStyle.Background(colAccent).Foreground(colSelFg).
+			Render(fitWidth(sel.Name+" > "+m.paletteSecondaryInput+"▏", w)))
+	}
+	lines = append(lines, "") // blank between prompt and body
+
+	// Stage 1: description + any submit error, both inside the box.
 	if m.paletteStage == 1 {
 		sel := m.paletteFiltered[m.paletteCursor]
-		return strings.Join([]string{
-			dimStyle.Render("> " + sel.Name + ":"),
-			"",
-			fitWidth(sel.Description, w),
-		}, "\n")
+		lines = append(lines, dimStyle.Render(fitWidth(sel.Description, w)))
+		if m.statusMsg != "" {
+			lines = append(lines, "", dimStyle.Render(fitWidth(m.statusMsg, w)))
+		}
+		return strings.Join(lines, "\n")
 	}
+
+	// Stage 0: filtered command rows; cursor row = full-width accent.
 	if len(m.paletteFiltered) == 0 {
-		return dimStyle.Render(fitWidth("(no matching commands)", w))
+		lines = append(lines, dimStyle.Render(fitWidth("(no matching commands)", w)))
+		return strings.Join(lines, "\n")
 	}
-	var lines []string
+	bodyRows := h - len(lines) // rows left under the prompt + blank
 	for i, c := range m.paletteFiltered {
-		if i >= h {
+		if i >= bodyRows {
 			break
 		}
 		row := c.Name + "  — " + c.Description
