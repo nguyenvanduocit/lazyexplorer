@@ -320,6 +320,19 @@ func (m model) renderStatus() string {
 		p := promptStyle.Background(colWarn).Foreground(lipgloss.Color("#000000")).
 			Render("Rename: " + m.input + "▏")
 		return p
+	case modeSearch:
+		// Fuzzy-input prompt "/query▏" (the hint bar is intentionally hidden in
+		// search). While the recursive walk runs, an "indexing…" chip sits beside
+		// the prompt so the empty list reads as "still loading", not "no results".
+		p := promptStyle.Background(colAccent).Foreground(colSelFg).
+			Render("/" + m.searchQuery + "▏")
+		if m.searchIndexing {
+			return p + " " + renderingStyle.Render("• indexing…")
+		}
+		if m.statusMsg != "" {
+			return p + " " + dimStyle.Render(m.statusMsg)
+		}
+		return p
 	default:
 		hints := "[↑↓/jk/click] move  [enter/l] open  [h/bksp] up  [r] rename  [d] delete  [wheel] scroll  [q] quit"
 		status := hints

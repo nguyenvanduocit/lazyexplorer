@@ -10,6 +10,8 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.7
 	github.com/google/uuid v1.6.0
 	github.com/nguyenvanduocit/glamour/v2 v2.0.1-0.20260527145718-65d10f4e7745
+	github.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06
+	github.com/sahilm/fuzzy v0.1.2
 )
 
 require (

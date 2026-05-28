@@ -41,7 +41,35 @@ const (
 	modeNormal mode = iota
 	modeConfirmDelete
 	modeRename
+	modeSearch
 )
+
+// walkCacheTTL is how long a recursive walk stays fresh enough to reuse without
+// re-walking (PRD D8). Re-activating search within this window skips the walk
+// entirely — long enough that a search → Enter → glance-back cycle reuses the
+// cache, short enough that a stale tree never lingers. A walk of a 5k-file repo
+// is ~30-80ms, too small to justify an fsnotify watcher (deferred, §5.11).
+const walkCacheTTL = 30 * time.Second
+
+// searchWalkedMsg carries an async recursive walk back to the Update loop. gen
+// identifies which enterSearch dispatched it; a stale walk (the user already
+// Esc'd and re-entered, bumping searchGen) is dropped so its results never
+// clobber a newer walk's — the same gen-counter discipline as previewRenderedMsg.
+type searchWalkedMsg struct {
+	gen     uint64
+	results []entry
+	err     error
+}
+
+// walkTreeCmd runs walkTree off the Update goroutine (a recursive walk of a
+// large tree is too slow to block every keystroke) and returns the result tagged
+// with gen so Update can discard a stale walk.
+func walkTreeCmd(root string, gen uint64) tea.Cmd {
+	return func() tea.Msg {
+		out, err := walkTree(root)
+		return searchWalkedMsg{gen: gen, results: out, err: err}
+	}
+}
 
 type model struct {
 	root string // jail root — cwd may equal or descend from this, never above
@@ -85,6 +113,25 @@ type model struct {
 	mode      mode
 	input     string // buffer for rename
 	statusMsg string
+
+	// Recursive fuzzy search (PRD §5.2). modeSearch re-purposes m.entries/cursor/
+	// listTop as the result list, so the pre-search values are snapshotted below
+	// and restored on Esc (FR10). searchAll is the walked tree (flat, names are
+	// relPaths) that filterSearch ranks over; searchAllAt + walkCacheTTL gate
+	// re-walking; searchIndexing drives the status-bar chip while a walk runs;
+	// searchGen tags each async walk so a stale one (rapid /→Esc→/) is dropped
+	// — same discipline as renderGen for previews.
+	searchQuery    string
+	searchAll      []entry
+	searchAllAt    time.Time
+	searchIndexing bool
+	searchGen      uint64
+
+	searchSavedCwd     string
+	searchSavedEntries []entry
+	searchSavedFsSig   uint64
+	searchSavedCursor  int
+	searchSavedListTop int
 
 	leftRatio float64 // left panel width as a fraction of total; drag-adjustable
 	dragging  bool    // true while the user is dragging the panel divider
@@ -259,7 +306,15 @@ func (m *model) refreshPreview() {
 		return
 	}
 	sel := m.entries[m.cursor]
-	full := filepath.Join(m.cwd, sel.name)
+	// In search mode the entry name is a path relative to the jail root (e.g.
+	// "docs/prd-search.md"), so resolve it against root; otherwise it is a bare
+	// name in the current directory. One branch keeps the whole async preview
+	// pipeline (syncPreview/applyPreview, renderer registry) unchanged (FR7).
+	base := m.cwd
+	if m.mode == modeSearch {
+		base = m.root
+	}
+	full := filepath.Join(base, sel.name)
 	if sel.isDir {
 		entries, err := previewDir(full)
 		if err != nil {
@@ -452,6 +507,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			nm, cmd = m.updateConfirmDelete(msg)
 		case modeRename:
 			nm, cmd = m.updateRename(msg)
+		case modeSearch:
+			nm, cmd = m.updateSearch(msg)
 		default:
 			nm, cmd = m.updateNormal(msg)
 		}
@@ -459,6 +516,31 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case previewRenderedMsg:
 		m.applyPreview(msg)
 		return m, nil
+	case searchWalkedMsg:
+		// A walk completed. Drop it entirely if the gen no longer matches — the
+		// user re-entered search, so a newer walk owns the result list (FR2).
+		if msg.gen != m.searchGen {
+			return m, nil
+		}
+		// Always warm the cache from a current-gen walk, even if the user has
+		// since Esc'd back to normal mode: it makes the next "/" a cache hit.
+		m.searchIndexing = false
+		m.searchAll = msg.results
+		m.searchAllAt = time.Now()
+		// But only swap the walk INTO the visible list when still searching. A
+		// walk that lands after Esc (Esc does not bump the gen) must not clobber
+		// the restored normal-mode listing — populating the cache above is enough.
+		if m.mode != modeSearch {
+			return m, nil
+		}
+		m.applySearchFilter() // sets the result list + the FR15 "0 results" hint
+		if msg.err != nil {
+			// filepath.WalkDir can return both partial results AND an error; keep
+			// what we gathered and surface the error (overriding the hint above) so
+			// the list is still useful while the user knows the walk was partial.
+			m.statusMsg = "⚠ walk error: " + msg.err.Error()
+		}
+		return m, tea.Batch(cmd, m.syncPreview())
 	default:
 		return m, nil
 	}
@@ -672,6 +754,12 @@ func (m model) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "K", "ctrl+u":
 		m.scrollPreview(-5)
 
+	case "/":
+		// Enter recursive fuzzy search. enterSearch snapshots the current state
+		// (for Esc restore) and returns a walk Cmd on a cache miss (nil on a
+		// cache hit) — forward it so the async walk dispatches.
+		return m, m.enterSearch()
+
 	case "r":
 		if len(m.entries) > 0 && m.entries[m.cursor].name != ".." {
 			m.mode = modeRename
@@ -736,6 +824,159 @@ func (m *model) ascend() {
 	}
 	m.refreshPreview()
 	m.statusMsg = ""
+}
+
+// updateSearch handles keypresses while in modeSearch (PRD §5.5). Esc and a
+// backspace on an empty query exit + restore (FR10/D13); Enter opens the
+// selected result (FR8/FR9); up/down (and ctrl+p/ctrl+n) move within the result
+// list; backspace trims a rune; any printable text appends to the query. Every
+// query mutation re-filters (FR6). Keys are tea.KeyPressMsg in v2 — printable
+// input arrives in msg.Text (empty for named keys), the same pattern updateRename
+// uses; named keys are matched via msg.String().
+func (m model) updateSearch(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.exitSearchRestore()
+		return m, nil
+	case "enter":
+		m.openSearchResult()
+		return m, nil
+	case "up", "ctrl+p":
+		if m.cursor > 0 {
+			m.cursor--
+			m.refreshPreview()
+		}
+	case "down", "ctrl+n":
+		if m.cursor < len(m.entries)-1 {
+			m.cursor++
+			m.refreshPreview()
+		}
+	case "backspace":
+		if m.searchQuery == "" {
+			m.exitSearchRestore() // D13: backspace on an empty query backs out
+			return m, nil
+		}
+		r := []rune(m.searchQuery)
+		m.searchQuery = string(r[:len(r)-1])
+		m.applySearchFilter()
+	default:
+		// msg.Text holds the printable characters of the key press (empty for
+		// arrows / function keys). Appending it builds the query a rune at a time.
+		if msg.Text != "" {
+			m.searchQuery += msg.Text
+			m.applySearchFilter()
+		}
+	}
+	return m, nil
+}
+
+// enterSearch transitions normal → search (PRD §5.5, FR1/FR2). It snapshots the
+// pre-search state for Esc restore, then either reuses a fresh walk (cache hit
+// within walkCacheTTL → no Cmd) or dispatches an async walk and shows the
+// indexing chip (cache miss). It returns a tea.Cmd the caller must forward; nil
+// on a cache hit.
+func (m *model) enterSearch() tea.Cmd {
+	m.searchSavedCwd = m.cwd
+	m.searchSavedEntries = append([]entry(nil), m.entries...) // defensive copy
+	m.searchSavedFsSig = m.fsSig
+	m.searchSavedCursor = m.cursor
+	m.searchSavedListTop = m.listTop
+
+	m.mode = modeSearch
+	m.searchQuery = ""
+	m.statusMsg = ""
+
+	// Cache hit: the last walk is still fresh — filter it immediately, no re-walk.
+	if len(m.searchAll) > 0 && time.Since(m.searchAllAt) < walkCacheTTL {
+		m.applySearchFilter()
+		return nil
+	}
+	// Cache miss: walk async. List is empty (refreshPreview shows the placeholder)
+	// and the indexing chip explains why until the walk lands. Bumping searchGen
+	// invalidates any in-flight walk from a previous activation.
+	m.searchIndexing = true
+	m.searchGen++
+	m.entries = nil
+	m.cursor = 0
+	m.listTop = 0
+	m.refreshPreview()
+	return walkTreeCmd(m.root, m.searchGen)
+}
+
+// exitSearchRestore leaves search mode and restores the exact pre-search state
+// (PRD §5.5, FR10): cwd, entries, fsSig (the poll-loop baseline), cursor, and
+// scroll. refreshPreview then re-syncs the right panel to the restored selection.
+func (m *model) exitSearchRestore() {
+	m.entries = m.searchSavedEntries
+	m.cwd = m.searchSavedCwd
+	m.fsSig = m.searchSavedFsSig
+	m.cursor = m.searchSavedCursor
+	m.listTop = m.searchSavedListTop
+	m.mode = modeNormal
+	m.searchQuery = ""
+	m.statusMsg = "search cancelled"
+	m.refreshPreview()
+}
+
+// openSearchResult acts on the highlighted result (PRD §5.5, FR8/FR9). A file
+// result cd's into its parent and lands the cursor on the basename; a folder
+// result cd's into the folder. Both are jail-checked via withinRoot. An empty
+// result list (walk still running / no matches) falls back to a clean restore
+// rather than indexing out of bounds.
+func (m *model) openSearchResult() {
+	if m.cursor >= len(m.entries) {
+		m.exitSearchRestore()
+		return
+	}
+	sel := m.entries[m.cursor]
+	target := filepath.Join(m.root, sel.name)
+	if !withinRoot(m.root, target) {
+		m.statusMsg = "⚠ blocked: outside root"
+		return
+	}
+
+	m.mode = modeNormal
+	m.searchQuery = ""
+	m.statusMsg = ""
+	m.cursor = 0
+	m.listTop = 0
+
+	if sel.isDir {
+		m.cwd = target // FR9: cd into the folder itself
+		m.reload()
+		return
+	}
+
+	// FR8: cd into the file's parent, then land the cursor on the basename.
+	m.cwd = filepath.Dir(target)
+	m.reload()
+	base := filepath.Base(sel.name)
+	for i, e := range m.entries {
+		if e.name == base {
+			m.cursor = i
+			break
+		}
+	}
+	m.refreshPreview()
+}
+
+// applySearchFilter recomputes the result list from the current query (PRD §5.5,
+// FR6). The cursor and scroll reset to the top match, and the preview re-syncs to
+// the new selection.
+func (m *model) applySearchFilter() {
+	m.entries = filterSearch(m.searchAll, m.searchQuery, maxSearchResults)
+	m.cursor = 0
+	m.listTop = 0
+	// A non-empty query that matched nothing gets an explicit hint (FR15) so the
+	// empty list reads as "no match", distinct from the indexing/empty-tree case.
+	// An empty query (the browse-everything view) clears any stale hint.
+	switch {
+	case m.searchQuery != "" && len(m.entries) == 0:
+		m.statusMsg = "(0 results — refine or Esc)"
+	default:
+		m.statusMsg = ""
+	}
+	m.refreshPreview()
 }
 
 func (m model) updateConfirmDelete(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {

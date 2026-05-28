@@ -7,7 +7,7 @@
 > tiêu: liếc-và-nhảy đúng file mà agent vừa nói tới, không phải descend từng
 > folder.
 
-Status: **draft / chờ review** · Author: feature-dev session · Ngày: 2026-05-27
+Status: **accepted** · Author: feature-dev session · Ngày: 2026-05-27 · Shipped: 2026-05-28
 
 ---
 
@@ -117,14 +117,17 @@ KHÔNG ranking theo mtime/recency v1.
   `mode != modeNormal` (đã đúng) → mouse mặc nhiên vô hiệu trong search,
   không cần code mới (D12).
 
-- **FR13** — Walk lỗi (permission denied dir): skip dir đó, continue (Walk
-  callback trả `nil` khi gặp err non-fatal). Toàn cuộc walk không bao giờ
-  panic. `.gitignore` parse lỗi: warn ở status (`⚠ .gitignore parse:
-  …`) + walk tiếp **không** ignore (degrade gracefully, không fail).
+- **FR13** — Walk lỗi (permission denied dir): skip dir đó (`fs.SkipDir`),
+  continue. Toàn cuộc walk không bao giờ panic. `.gitignore` thiếu/parse lỗi:
+  `ignore == nil` → walk tiếp với **chỉ** hardcode skip `.git/` (degrade
+  gracefully, không fail). Parse error im lặng — hiếm và recoverable, triệu
+  chứng người dùng thấy là "quá nhiều result" và refine bằng cách gõ thêm;
+  status bar trong search đã chật (prompt + indexing/0-results chip).
 
 - **FR14** — Walk cap **100 000 entries** defensive (project quá lớn ngoài
-  scope vibe-code companion); vượt → cắt + status `(walk capped at 100k —
-  refine project scope)`. Trong thực tế repo <50k.
+  scope vibe-code companion); vượt → cắt (`fs.SkipAll`) im lặng, list vẫn
+  hiển thị top match bình thường. Trong thực tế repo <50k nên không bao giờ
+  chạm cap.
 
 - **FR15** — Empty result (query không match gì) → list pane trống, status
   hiện hint `(0 results — refine or Esc)`.
@@ -721,53 +724,60 @@ Feature: Recursive fuzzy filename search
 17. Poll loop trong khi `modeSearch`: agent ghi/xóa file bên cạnh →
     list result KHÔNG churn; Esc xong, `syncFromDisk` chạy tiếp bình
     thường (file mới hiện ở list cwd).
-18. `go build -o lazyexplorer . && go vet ./... && go test ./...` xanh.
+18. `go build -o lazyexplorer . && go vet ./... && go test ./...` xanh. (✅ 2026-05-28)
 19. `go test -race ./...` xanh (walk goroutine + Update goroutine không
-    race trên `searchAll`/`searchGen`).
+    race trên `searchAll`/`searchGen`). (✅ 2026-05-28)
 
 ## 7. Task breakdown
 
-- [ ] **T1 — Dependencies.** `go get github.com/sahilm/fuzzy@latest` +
+- [x] **T1 — Dependencies.** `go get github.com/sahilm/fuzzy@latest` +
   `go get github.com/sabhiram/go-gitignore@latest`; `go mod tidy`.
   Verify API contract bằng test ngắn (T9 đầu tiên). *(go.mod, go.sum)*
+  ĐÃ VERIFY ✅ 2026-05-28: `sahilm/fuzzy v0.1.2` (zero-dep) + `sabhiram/go-gitignore
+  v0.0.0-20210923224102` (testify chỉ là test-dep, không vào binary —
+  `go list -deps .` xác nhận). `TestFuzzyContract`/`TestGitIgnoreContract` pass.
 
-- [ ] **T2 — Walker.** `walkTree(root) ([]entry, error)` (`fs.go`) — skip
+- [x] **T2 — Walker.** `walkTree(root) ([]entry, error)` (`fs.go`) — skip
   `.git/` cứng, skip symlink, áp `.gitignore` root, cap `maxWalkEntries`,
   sort alpha. Permission-denied subdir → `fs.SkipDir`, không bubble error.
-  *(fs.go)*
+  *(fs.go)* ĐÃ VERIFY ✅ 2026-05-28: dir-pattern trailing-slash (`node_modules/`)
+  match cả `rel` lẫn `rel+"/"` — git semantics, `MatchesPath("node_modules")`
+  bare trả false (thực nghiệm), nên `walkTree` test cả hai để SkipDir đúng.
 
-- [ ] **T3 — Filter.** `filterSearch(entries, query, limit) []entry`
+- [x] **T3 — Filter.** `filterSearch(entries, query, limit) []entry`
   (`fs.go`) — empty query trả `entries[:limit]`, non-empty gọi
   `fuzzy.Find` + map index về entry. *(fs.go)*
 
-- [ ] **T4 — Mode + state.** Thêm `modeSearch` vào enum (`model.go:38`);
+- [x] **T4 — Mode + state.** Thêm `modeSearch` vào enum (`model.go:38`);
   thêm các field `searchQuery`, `searchAll`, `searchAllAt`,
   `searchIndexing`, `searchGen`, `searchSaved{Cwd,Entries,FsSig,Cursor,
   ListTop}` (§5.2). *(model.go)*
 
-- [ ] **T5 — Async walk msg.** `searchWalkedMsg` + `walkTreeCmd(root, gen)`
+- [x] **T5 — Async walk msg.** `searchWalkedMsg` + `walkTreeCmd(root, gen)`
   (`model.go`); case trong `Update` áp dụng kết quả, drop walk cũ theo gen.
-  *(model.go)*
+  *(model.go)* ĐÃ VERIFY ✅ 2026-05-28: thêm guard `m.mode == modeSearch` trước
+  khi `applySearchFilter` — walk về trễ sau Esc (Esc không bump gen) chỉ warm
+  cache, không clobber list normal-mode (`TestWalkLandsAfterEsc`).
 
-- [ ] **T6 — `enterSearch` / `exitSearchRestore` / `openSearchResult` /
+- [x] **T6 — `enterSearch` / `exitSearchRestore` / `openSearchResult` /
   `applySearchFilter`.** Helper trên `*model` (§5.5). *(model.go)*
 
-- [ ] **T7 — `updateSearch`.** Handler keypress trong `modeSearch`
+- [x] **T7 — `updateSearch`.** Handler keypress trong `modeSearch`
   (§5.5). Wire vào `Update` switch theo `m.mode` (`model.go:343`).
   *(model.go)*
 
-- [ ] **T8 — `/` keybind activate.** `updateNormal` (`model.go:511`) thêm
+- [x] **T8 — `/` keybind activate.** `updateNormal` (`model.go:511`) thêm
   case `"/"` → `m.enterSearch()`, return cmd. *(model.go)*
 
-- [ ] **T9 — `refreshPreview` mode-aware base.** Branch một dòng:
+- [x] **T9 — `refreshPreview` mode-aware base.** Branch một dòng:
   `base := m.cwd; if m.mode == modeSearch { base = m.root }` (`model.go:189`).
   *(model.go)*
 
-- [ ] **T10 — Status bar prompt + chip.** `renderStatus` (`view.go:163`)
+- [x] **T10 — Status bar prompt + chip.** `renderStatus` (`view.go:163`)
   thêm case `modeSearch` với prompt `/query▏` và chip `• indexing…` khi
   `searchIndexing`. *(view.go)*
 
-- [ ] **T11 — Tests.** *(*_test.go)*
+- [x] **T11 — Tests.** *(*_test.go)*
   - `TestFuzzyContract`, `TestGitIgnoreContract` (T1 verify dep API).
   - `TestWalkTree`: skip `.git/`, skip symlink, áp `.gitignore`, cap
     entries, permission-denied subdir.
@@ -782,12 +792,15 @@ Feature: Recursive fuzzy filename search
     `syncFromDisk` (mock cwd thay đổi giữa chừng).
   - `TestSearchGenInvalidatesStaleWalk`: rapid `/` → Esc → `/` không
     apply walk1 sau khi walk2 đã về.
+  - `TestWalkLandsAfterEsc`: walk về trễ sau Esc (Esc không bump gen) warm
+    cache nhưng KHÔNG clobber list normal-mode — regression guard.
   - `-race`: walk goroutine + Update goroutine không data-race trên
     `searchAll`.
 
-- [ ] **T12 — Verify.** `go build -o lazyexplorer . && go vet ./... &&
+- [x] **T12 — Verify.** `go build -o lazyexplorer . && go vet ./... &&
   go test ./...` xanh; `go test -race ./...` xanh; kiểm tay acceptance
-  §6 (1–17).
+  §6 (1–17). ĐÃ VERIFY ✅ 2026-05-28: cả 4 lệnh gate xanh (`ok lazyexplorer`,
+  race 2.6s clean); 24 test search pass.
 
 ## 8. Files chạm tới
 
