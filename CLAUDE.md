@@ -17,6 +17,21 @@ markdown via the fork `github.com/nguyenvanduocit/glamour/v2`, syntax highlight 
   unchanged.
 - lipgloss v2 removed `SetColorProfile`: styles render full truecolor; downsampling happens at
   the output writer. Detect background via `lipgloss.HasDarkBackground(os.Stdin, os.Stdout)`.
+- lipgloss v2 `.Width(n)` is the **total outer width** of a styled block — border + padding
+  **included**, not the content width. A bordered/padded box's usable text area is therefore
+  `n - GetHorizontalFrameSize()`. When sizing a box from an inner (text) width, pass
+  `inner + frame` to `.Width()`; passing the inner width alone shrinks the text area by the
+  frame and silently **wraps** the widest rows (the box also ends up `frame` cols too narrow).
+  This bit `renderModal`/`modalBoxStyle` — `modalSize` returns the inner width, so renderModal
+  passes `bw + GetHorizontalFrameSize()` to `.Width()`. Probe before guessing:
+  `lipgloss.Width(style.Width(n).Render("x"))` tells you exactly what `n` maps to.
+- lipgloss v2 `Canvas`/`Compositor` overlays are **opaque at the cell level**: a top layer's
+  cells — even space cells with no background — overwrite the layer below, so the background
+  does **not** bleed through a box's interior. A floating box thus needs **no** background fill
+  to hide what's behind it (`overlayCentered` relies on this). An opaque fill only sets the
+  box's *color*; a fill that differs from the terminal/pane background reads as a distinct
+  panel inside the border (looks "double-framed"). For a box that floats cleanly on the app
+  (crush's look), use **border only, no `Background`** — the interior then matches the terminal.
 
 ## Goal & Positioning
 
@@ -75,6 +90,14 @@ Stack & v2 API notes). When a need arises — "how do good
 TUIs do X?" — read the relevant clone before inventing an approach. Borrow **patterns and
 idioms**, never copy code wholesale, and always filter through our simplicity ethos: these
 projects are mostly bigger and more featured than we want to be.
+
+When the task is to match a clone's **look** ("make X look like crush"), read the actual style
+definition in the clone source — do **not** rely on a subagent's prose summary. Summaries drop
+load-bearing details: e.g. crush's command palette is `Dialog.View = base.Border(RoundedBorder).
+BorderForeground(primary)` with **no `Background`** (`tmp/crush/internal/ui/styles/quickstyle.go`),
+border-only — a summary that says "rounded border" but omits "no background fill" sends you to
+add an opaque panel that looks nothing like the original. Verify the chrome (border, background,
+padding) and the exact colors from the `.NewStyle()` chain itself.
 
 | Clone | Upstream | Consult it for |
 | --- | --- | --- |

@@ -97,7 +97,12 @@ func TestOverlayCenteredComposites(t *testing.T) {
 	}
 }
 
-func TestPaletteBodyPromptAtTop(t *testing.T) {
+// TestPaletteBodyTitleAndInput pins the crush-style header: row 0 is the
+// "Commands" title followed by a ╱ rule, row 1 is the plain "› query" input.
+// The old full-width accent prompt bar is gone — the input row carries no
+// accent *background* (the selected command row still does; that's the cursor
+// bar). #7D56F4 renders as truecolor bg "48;2;125;86;244" (lipgloss v2).
+func TestPaletteBodyTitleAndInput(t *testing.T) {
 	m := model{
 		mode:            modeCommandPalette,
 		paletteStage:    0,
@@ -105,9 +110,17 @@ func TestPaletteBodyPromptAtTop(t *testing.T) {
 		paletteFiltered: defaultCommands(),
 	}
 	body := m.renderPaletteBody(50, 10)
-	first := stripANSI(strings.Split(body, "\n")[0])
-	if !strings.HasPrefix(strings.TrimSpace(first), "> re") {
-		t.Errorf("row 0 = %q, want search prompt '> re…'", first)
+	rows := strings.Split(body, "\n")
+	title := stripANSI(rows[0])
+	if !strings.Contains(title, "Commands") || !strings.Contains(title, "╱") {
+		t.Errorf("row 0 = %q, want 'Commands' title + ╱ rule", title)
+	}
+	input := stripANSI(rows[1])
+	if !strings.Contains(input, "› re") {
+		t.Errorf("row 1 = %q, want input '› re…'", input)
+	}
+	if strings.Contains(rows[1], "48;2;125;86;244") {
+		t.Errorf("input row still paints the accent prompt bar:\n%q", rows[1])
 	}
 }
 
@@ -139,6 +152,27 @@ func TestModalNoOverflow(t *testing.T) {
 				t.Errorf("%dx%d row %d width %d > %d", sz.w, sz.h, i, lipgloss.Width(ln), sz.w)
 			}
 		}
+	}
+}
+
+// TestPaletteModalNoWrap guards the width contract between modalSize (returns
+// the inner text width) and renderModal. lipgloss v2 .Width is the TOTAL outer
+// width — frame included — so renderModal must pass outer (inner+frame), else
+// the text area is short by the frame and the longest description ("copy path")
+// wraps, inflating the box by a row. At a width where every row fits, the box
+// height is exactly border(2) + header(3: title/input/blank) + one row/command.
+func TestPaletteModalNoWrap(t *testing.T) {
+	m := model{
+		mode: modeCommandPalette, width: 90, height: 28,
+		paletteFiltered: defaultCommands(), keymap: defaultKeyMap(),
+	}
+	box, ok := m.renderModal()
+	if !ok {
+		t.Fatal("palette mode should produce a modal")
+	}
+	want := 2 + 3 + len(defaultCommands())
+	if got := lipgloss.Height(box); got != want {
+		t.Errorf("modal box height = %d, want %d (a wrapped command row inflates it):\n%s", got, want, box)
 	}
 }
 
@@ -200,6 +234,25 @@ func TestRenderModal(t *testing.T) {
 	// Help mode → modal too.
 	if _, ok := (model{mode: modeHelp, width: 100, height: 30, keymap: defaultKeyMap()}).renderModal(); !ok {
 		t.Errorf("help mode should produce a modal")
+	}
+}
+
+// TestGradientLine pins the title rule's fade: glyphs are preserved, the first
+// is exactly the accent (#7D56F4 → fg 38;2;125;86;244) and the last exactly the
+// dim border (#6C757D → fg 38;2;108;117;125); empty input yields empty output.
+func TestGradientLine(t *testing.T) {
+	out := gradientLine("╱╱╱", colAccent, colDim)
+	if stripANSI(out) != "╱╱╱" {
+		t.Errorf("gradientLine altered glyphs: %q", stripANSI(out))
+	}
+	if !strings.Contains(out, "38;2;125;86;244") {
+		t.Errorf("first glyph not accent: %q", out)
+	}
+	if !strings.Contains(out, "38;2;108;117;125") {
+		t.Errorf("last glyph not dim: %q", out)
+	}
+	if gradientLine("", colAccent, colDim) != "" {
+		t.Error("gradientLine(\"\") should be empty")
 	}
 }
 

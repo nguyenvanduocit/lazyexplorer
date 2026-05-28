@@ -9,7 +9,7 @@
 > count-prefix — đó là quyết định sau khi đọc `tmp/crush` (charmbracelet/crush) thấy
 > modern keyboard-first TUI bỏ qua vim modal mà vẫn discoverable hơn vim nhiều.
 
-Status: **accepted** · Author: feature-dev session · Reviewer: critic (independent pass, 2026-05-28) · Ngày: 2026-05-28 · Baseline shipped: 2026-05-28 (keymap registry + command palette + help — ✅ `go build && go vet && go test ./... && go test -race ./...` green) · **Rev 2026-05-28b: command palette + help render as a floating Raycast/Spotlight modal (D9/D10/D21/D22, §5.6/§5.7) — shipped 2026-05-28 (T8–T14; ✅ `go build && go vet && go test ./... && go test -race ./...` green; visual verdict palette + help PASS at 80×24 and 60×24). T13 (cross-ref prose polish) deferred.**
+Status: **accepted** · Author: feature-dev session · Reviewer: critic (independent pass, 2026-05-28) · Ngày: 2026-05-28 · Baseline shipped: 2026-05-28 (keymap registry + command palette + help — ✅ `go build && go vet && go test ./... && go test -race ./...` green) · **Rev 2026-05-28b: command palette + help render as a floating Raycast/Spotlight modal (D9/D10/D21/D22, §5.6/§5.7) — shipped 2026-05-28 (T8–T14; ✅ `go build && go vet && go test ./... && go test -race ./...` green; visual verdict palette + help PASS at 80×24 and 60×24). T13 (cross-ref prose polish) deferred.** · **Rev 2026-05-29: command-palette body restyled crush-like — box border-only (no background fill), `Commands` title + `╱` gradient rule + plain `›` input, muted rows; `renderModal` sizes the box to outer width (lipgloss v2 `.Width` is frame-inclusive — fixes the widest-row wrap). Gate + visual verdict re-PASS at 90×28 / 60×24.**
 
 ---
 
@@ -146,7 +146,7 @@ Refactor keybind từ inline switch + hardcoded hint sang `bubbles/v2 key.Bindin
 | D6 | Clipboard | **Shell out** — `pbcopy` (darwin) / `xclip -selection clipboard` (linux) / `wl-copy` (wayland) — không thêm dep | Một Go lib clipboard cần CGo (`github.com/atotto/clipboard` good but pulls X11 deps trên linux); shell-out đơn giản, fail-soft (clipboard không có → status warn, không crash), test-friendly. |
 | D7 | Palette commands v1 | `reload` · `copy path` · `cd <path>` · `quit` | 4 lệnh có pain point thật hôm nay (xem §1.3); KHÔNG bao gồm `rename`/`delete` (high-frequency, ở lane phím trực tiếp); KHÔNG bao gồm `toggle hidden` (lazyexplorer luôn show hidden — `fs.go:37` comment). |
 | D8 | Palette filter algorithm | **Substring case-insensitive** trên command Name | sahilm/fuzzy chỉ make sense khi >100 items; 4-10 commands → substring đủ; KHÔNG kéo dep mới cho v1. Nếu `prd-search.md` ship trước, palette CÓ THỂ reuse `fuzzy.Find` (defer optional optimization). |
-| D9 | Palette UI | **Floating modal** căn giữa màn hình (Raycast/Spotlight-style): box opaque có border, search input ở **đỉnh box**, filtered list bên dưới; box composite đè lên nền (list + divider + preview thật) qua `lipgloss.Canvas`/`Compositor`/`Layer`. | Search-at-top + box nổi căn giữa là mental model Spotlight/Raycast user đã quen; nền (tree + preview) vẫn đọc được phía sau box → glance-friendly. lipgloss v2 (`v2.0.3`, đã trong `go.mod`) sẵn có Canvas/Compositor/Layer — cùng primitive crush dùng (`tmp/crush/.../dialog/dialog.go:166 DrawCenterCursor` qua ultraviolet), nhưng wrapper cấp cao hơn nên giữ được pattern string-based `tea.NewView(content)` hiện tại. |
+| D9 | Palette UI | **Floating modal** căn giữa màn hình (crush-style): box **chỉ viền rounded accent** (no background fill — interior khớp nền terminal, nổi sạch trên panes), `Commands` title + đường `╱` gradient (accent→dim) + input `›` ở **đỉnh box**, filtered list muted bên dưới (cursor row = full-width accent bar); box composite đè lên nền (list + divider + preview thật) qua `lipgloss.Canvas`/`Compositor`/`Layer`. | Box nổi căn giữa + title/input-at-top là mental model Spotlight/Raycast user đã quen; nền (tree + preview) vẫn đọc được phía sau box → glance-friendly. Border-only (no fill) khớp crush `Dialog.View = base.Border(RoundedBorder).BorderForeground(primary)` (`tmp/crush/internal/ui/styles/quickstyle.go:846`) — nền terminal lộ qua interior nên không có panel đặc đọc thành "frame" thứ hai. lipgloss v2 (`v2.0.3`, đã trong `go.mod`) sẵn có Canvas/Compositor/Layer — cùng primitive crush dùng nhưng wrapper cấp cao hơn nên giữ được pattern string-based `tea.NewView(content)`. |
 | D10 | Help overlay UI | Same as D9: **floating modal** căn giữa, body là bảng binding nhóm theo chủ đề, scrollable qua `j/k`. | Một cơ chế overlay cho cả palette lẫn help → nhất quán; nền list + preview vẫn hiện sau box. |
 | D11 | `cd <path>` UX | Palette select `cd <path>` → palette chuyển sang text-input mode cho path → Enter resolve + jail-check + cd | Composable: palette là two-stage (select command → input args). Một path text input đủ generic cho cd; tương lai nếu thêm command cần args, dùng cùng stage. |
 | D12 | `ShortHelp()` placement | Normal mode: status bar bottom (`renderStatus` default case, `view.go:703-726`). Khi modal mở: status bar hiện short-help của mode đó (`[enter] run · [esc] close` cho palette; `[j/k] scroll · [esc] close` cho help). | Tái dùng vị trí, no chrome added; modal-mode hint cho user biết phím khả dụng trong modal. |
@@ -159,7 +159,7 @@ Refactor keybind từ inline switch + hardcoded hint sang `bubbles/v2 key.Bindin
 | D19 | Mouse trong palette/help | Disabled toàn bộ (`handleMouse` early-return khi `mode != modeNormal` đã sẵn) | Cùng discipline `prd-search.md` D12; nhất quán. |
 | D20 | Poll loop khi palette/help mở | Skip `syncFromDisk` — `model.go:453` đã check `m.mode == modeNormal && !m.dragging` | Free behavior: `modeCommandPalette` và `modeHelp` không match `modeNormal`. Không cần code mới. |
 | D21 | Cơ chế compositing modal | `lipgloss.Canvas` + `Compositor` + `Layer` (`v2.0.3`): nền (full-screen content) là Layer `Z(0)`, modal box là Layer `Z(1)` đặt tại `(cx,cy)` căn giữa; `Canvas.Render()` trả string cuối cho `tea.NewView`. | ĐÃ VERIFY ✅ (2026-05-28, scratch test): ANSI-styled bg composite sạch **dưới** box, không leak, mỗi row đúng `m.width`. Phương án **loại**: (a) crush `Dialog` interface + raw ultraviolet `Draw` — over-engineering cho 2-overlay surface, đòi dialog-stack manager; (b) manual string-splice per-line ANSI-aware — tự viết lại đúng thứ Canvas đã đóng gói. |
-| D22 | Backdrop sau modal | **Nền giữ nguyên** (không dim), box opaque nổi đè lên. | Đơn giản nhất, giữ context tree/preview đọc được. Dim backdrop cần re-style mọi cell nền → defer (§5.10). |
+| D22 | Backdrop sau modal | **Nền giữ nguyên** (không dim), box **border-only** (no fill) nổi đè lên — Canvas overlay opaque ở mức cell nên nền không lòi xuyên interior, dù box không có background. | Đơn giản nhất, giữ context tree/preview đọc được. Dim backdrop cần re-style mọi cell nền → defer (§5.10). |
 
 ## 4. Functional requirements
 
@@ -194,10 +194,12 @@ Refactor keybind từ inline switch + hardcoded hint sang `bubbles/v2 key.Bindin
   - `paletteCursor` = 0
   - `paletteCommands` = `defaultCommands()` (toàn bộ commands)
   - `paletteSecondaryInput` = "" (used cho cd path stage)
-  - **Floating modal** căn giữa màn hình: search prompt `> ▏` ở **đỉnh box**,
-    filtered command list bên dưới (highlighted row = `paletteCursor`, accent
-    full-width). Nền (list + divider + preview thật) hiện phía sau box. Status
-    bar hiện modal short-help (`[enter] run · [esc] close`).
+  - **Floating modal** căn giữa màn hình, box chỉ viền rounded (no fill): row 0 là
+    title `Commands` + đường `╱` gradient (accent→dim), row 1 là input `› <query>▏`
+    (chữ thường, không thanh nền), rồi filtered command list bên dưới (mỗi row =
+    `name` căn cột + `description` muted; cursor row = full-width accent bar). Nền
+    (list + divider + preview thật) hiện phía sau box. Status bar hiện modal
+    short-help (`[enter] run · [esc] close`).
 
 - **FR6** — Trong `modeCommandPalette`:
   - Ký tự in được → append vào `paletteQuery`, recompute filter (substring
@@ -229,8 +231,9 @@ Refactor keybind từ inline switch + hardcoded hint sang `bubbles/v2 key.Bindin
   → status `⚠ nothing selected`.
 
 - **FR10** — Command `cd <path>`: palette chuyển sang **stage 1** (arg input):
-  prompt ở **đỉnh box** đổi thành `cd > ▏`, `paletteSecondaryInput` thay
-  `paletteQuery`; body box hiện mô tả command cho context. Enter:
+  title ở **đỉnh box** đổi thành tên command (`cd`) + `╱` rule, input thành
+  `› <paletteSecondaryInput>▏` (thay `paletteQuery`); body box hiện mô tả command
+  cho context. Enter:
   - Resolve `~` → home, `.` → cwd, `..` → parent, absolute → as-is.
   - `filepath.Clean` + jail-check `withinRoot(m.root, target)` (`fs.go:88`).
   - **Target là file (không phải dir)** → status `⚠ not a directory: <path>`, stage 1.
@@ -933,16 +936,20 @@ func overlayCentered(bg, box string, w, h int) string {
 
 `renderModal` returns the styled box for the active overlay mode (`ok=false` in
 normal mode), and `modalSize` clamps the box to fit narrow/short terminals —
-the same floor discipline as `leftInnerWidth` (`view.go:196`):
+the same floor discipline as `leftInnerWidth` (`view.go:196`). `modalSize` hands
+back the **inner** (text) width; lipgloss v2 `.Width` is the **outer** width
+(frame included), so renderModal passes `bw + frame` — passing `bw` alone would
+shrink the text area by the frame and wrap the widest rows:
 
 ```go
 func (m model) renderModal() (string, bool) {
     bw, bh := m.modalSize()
+    ow := bw + modalBoxStyle.GetHorizontalFrameSize() // outer width for .Width
     switch m.mode {
     case modeCommandPalette:
-        return modalBoxStyle.Render(m.renderPaletteBody(bw, bh)), true
+        return modalBoxStyle.Width(ow).Render(m.renderPaletteBody(bw, bh)), true
     case modeHelp:
-        return modalBoxStyle.Render(m.renderHelpBody(bw, bh)), true
+        return modalBoxStyle.Width(ow).Render(m.renderHelpBody(bw, bh)), true
     default:
         return "", false
     }
@@ -975,28 +982,26 @@ func (m model) modalSize() (innerW, innerH int) {
 }
 ```
 
-`renderPaletteBody` (`view.go`) — search/arg prompt at the **box top**
-(Raycast-style; the prompt now lives in the box, not the status bar), filtered
-list below:
+`renderPaletteBody` (`view.go`) — crush-styled header (`Commands` title + `╱`
+gradient rule via `modalTitle`, plain `› query▏` input via `modalInput`), then
+the filtered list (muted rows, cursor row = full-width accent bar):
 
 ```go
 func (m model) renderPaletteBody(w, h int) string {
     var lines []string
 
-    // Row 0: the search prompt (stage 0) or the cd-arg prompt (stage 1).
+    // Header: title + ╱ rule, then the plain "› query" input. Stage 1 swaps the
+    // title for the command name and edits its argument.
     if m.paletteStage == 0 {
-        lines = append(lines, promptStyle.Background(colAccent).Foreground(colSelFg).
-            Render(fitWidth("> "+m.paletteQuery+"▏", w)))
+        lines = append(lines, modalTitle("Commands", w), modalInput(m.paletteQuery, w))
     } else {
         sel := m.paletteFiltered[m.paletteCursor]
-        lines = append(lines, promptStyle.Background(colAccent).Foreground(colSelFg).
-            Render(fitWidth(sel.Name+" > "+m.paletteSecondaryInput+"▏", w)))
+        lines = append(lines, modalTitle(sel.Name, w), modalInput(m.paletteSecondaryInput, w))
     }
-    lines = append(lines, "") // blank between prompt and body
+    lines = append(lines, "") // blank between header and body
 
-    // Stage 1: body is the chosen command's description, plus any submit error
-    // (e.g. a cd jail-block) shown INSIDE the box next to the input the user is
-    // correcting — not stranded at the screen bottom (Raycast-style).
+    // Stage 1: description + any submit error (e.g. a cd jail-block) shown INSIDE
+    // the box next to the input the user is correcting.
     if m.paletteStage == 1 {
         sel := m.paletteFiltered[m.paletteCursor]
         lines = append(lines, dimStyle.Render(fitWidth(sel.Description, w)))
@@ -1006,27 +1011,40 @@ func (m model) renderPaletteBody(w, h int) string {
         return strings.Join(lines, "\n")
     }
 
-    // Stage 0: filtered command rows; cursor row = full-width accent (same
-    // cursor marker the list pane uses, no caret glyph).
+    // Stage 0: filtered command rows; cursor row = full-width accent bar, the
+    // rest muted so the selection reads at a glance (crush list look).
     if len(m.paletteFiltered) == 0 {
         lines = append(lines, dimStyle.Render(fitWidth("(no matching commands)", w)))
         return strings.Join(lines, "\n")
     }
-    bodyRows := h - len(lines) // rows left under the prompt + blank
+    nameCol := 0
+    for _, c := range m.paletteFiltered {
+        if n := lipgloss.Width(c.Name); n > nameCol {
+            nameCol = n
+        }
+    }
+    nameCol += 2 // gap between the name column and its description
+    bodyRows := h - len(lines)
     for i, c := range m.paletteFiltered {
         if i >= bodyRows {
             break
         }
-        row := c.Name + "  — " + c.Description
+        row := fmt.Sprintf(" %-*s%s", nameCol, c.Name, c.Description)
         if i == m.paletteCursor {
             lines = append(lines, cursorActiveStyle.Width(w).Render(fitWidth(row, w)))
         } else {
-            lines = append(lines, fileStyle.Render(fitWidth(row, w)))
+            lines = append(lines, dimStyle.Render(fitWidth(row, w)))
         }
     }
     return strings.Join(lines, "\n")
 }
 ```
+
+`modalTitle` builds `head + " " + gradientLine(╱…)` sized to the exact plain
+width (no `fitWidth` — `gradientLine` emits per-rune SGR that `fitWidth` cannot
+measure); `modalInput` is `modalAccentStyle("›") + " " + fileStyle(query) +
+modalAccentStyle("▏")` with the query truncated to `w-3`; `gradientLine`
+interpolates each glyph's foreground from `colAccent`→`colDim` via `color.Color.RGBA()`.
 
 `renderHelpBody` (`view.go`) — grouped bindings scrolled by `helpTop`; logic is
 the shipped `renderHelp` (`view.go:779`) verbatim, only the caller changed (it
@@ -1213,8 +1231,8 @@ Marker comment ở `model.go` đầu `updateNormal` sau khi ship PRD này:
   recompile cho expert; nếu nhiều user xin remap, thêm loader sau.
 
 - **Dim/shade backdrop sau modal** (Spotlight-style darkening):
-  Cần re-style mọi cell nền → thêm render cost + một style mới. Box opaque nổi
-  trên nền nguyên (D22) đủ rõ cho v1; thêm dim sau nếu user thấy box chìm vào nền.
+  Cần re-style mọi cell nền → thêm render cost + một style mới. Box border-only
+  nổi trên nền nguyên (D22) đủ rõ cho v1; thêm dim sau nếu user thấy box chìm vào nền.
 
 - **Click-to-select trong modal** (mouse trên palette/help):
   `handleMouse` early-return khi `mode != modeNormal` (D19) → modal hiện
@@ -1278,7 +1296,7 @@ Feature: Keymap registry & command palette
     Given the focus is on the list pane
     When I press ctrl+p
     Then a command palette appears as a centered modal over the panes
-    And a search prompt sits at the top of the modal
+    And a "Commands" title and a "›" input sit at the top of the modal
     And the first command is highlighted
 
   Scenario: Type to filter palette commands
@@ -1299,7 +1317,7 @@ Feature: Keymap registry & command palette
     And "cd" is highlighted
     When I press Enter
     Then the palette enters its path-input stage
-    And the modal's prompt becomes "cd > ▏" at the top of the box
+    And the modal's title becomes "cd" and the input becomes "› ▏" at the top of the box
     And the modal body shows the cd command's description
 
   Scenario: cd to a path inside the jail succeeds
@@ -1389,10 +1407,11 @@ Feature: Keymap registry & command palette
 3. Gõ `cd` → list filter còn `cd`. Gõ `xyz` → list rỗng, dòng `(no matching
    commands)` hiện.
 4. Enter trên `reload` → palette đóng, list pane re-read, status "reloaded".
-5. Enter trên `cd` → prompt ở đỉnh box đổi `cd > ▏`, body box mô tả cd command.
+5. Enter trên `cd` → title ở đỉnh box đổi thành `cd`, input thành `› ▏`, body box
+   mô tả cd command.
 6. Trong cd stage, gõ `docs` Enter → `m.cwd` về `<root>/docs`.
 7. Trong cd stage, gõ `/etc` Enter → box hiện `⚠ blocked: outside root` dưới
-   prompt, palette vẫn ở cd stage.
+   input, palette vẫn ở cd stage.
 7b. Trong cd stage, gõ path tới một **file** trong root (vd `model.go`) Enter →
    box hiện `⚠ not a directory: model.go`, palette vẫn ở cd stage (FR10 — không
    để `m.reload()` gọi readDir trên file rồi set entries=nil).
@@ -1462,14 +1481,15 @@ Feature: Keymap registry & command palette
   divider + real preview), then composes the active overlay box centered via
   `overlayCentered` (Canvas/Compositor/Layer, §5.6); add `renderModal` + `modalSize`;
   remove `renderPreviewRegion` (preview pane always renders the real preview). *(view.go)* ✅
-- [x] **T9 — Box body + modal status (view.go).** `renderPaletteBody` (search/cd
-  prompt at box top + filtered list) + `renderHelpBody` (grouped bindings, helpTop
+- [x] **T9 — Box body + modal status (view.go).** `renderPaletteBody` (`Commands`
+  title + `╱` rule + plain `›` input at box top via `modalTitle`/`modalInput`/
+  `gradientLine`, then the filtered list) + `renderHelpBody` (grouped bindings, helpTop
   scroll, reuse `helpLineCount` clamp); `renderStatus` palette/help cases → modal
   short-help (§5.7). `shortHelp`/`fullHelp`/`renderShortHelp` unchanged. *(view.go, model.go)* ✅
-- [x] **T10 — `theme.go`.** Add `modalBoxStyle` (rounded border `colAccent` + opaque
-  dark bg) + constants `modalTargetCols=56`/`modalTargetRows`, `modalMargin`,
-  `modalMinCols`/`modalMinRows`. Body reuses `cursorActiveStyle`/`dimStyle`/`fileStyle`/
-  `promptStyle`. *(theme.go)* ✅
+- [x] **T10 — `theme.go`.** Add `modalBoxStyle` (rounded border `colAccent`, **border-only
+  — no background fill**) + `modalAccentStyle` (title/caret accent) + constants
+  `modalTargetCols=56`/`modalTargetRows`, `modalMargin`, `modalMinCols`/`modalMinRows`.
+  Body reuses `cursorActiveStyle`/`dimStyle`/`fileStyle`. *(theme.go)* ✅
 
 - [x] **T11a — Tests (full target list).** State-machine items shipped via the
   `[x] T11b` below; the modal items (last three bullets) shipped in `modal_test.go`. *(`*_test.go`)* ✅
@@ -1506,7 +1526,11 @@ Feature: Keymap registry & command palette
     **dưới** box, mỗi row == `m.width`, bg vẫn hiện ở margin (D21/D22). ✅
   - `TestModalSizeClamps` + `TestModalNoOverflow` (modal): 60×24 và width<80
     (vertical) → box vừa, không tràn (floor giống `leftInnerWidth`). ✅
-  - `TestPaletteBodyPromptAtTop` (modal): row 0 của box là search prompt `> …▏`. ✅
+  - `TestPaletteBodyTitleAndInput` (modal): row 0 là title `Commands` + `╱` rule, row 1
+    là input `› …`, và input KHÔNG mang accent background (thanh tím cũ đã bỏ). ✅
+  - `TestGradientLine` (modal): `╱` rule fade accent→dim, glyph giữ nguyên, empty→empty. ✅
+  - `TestPaletteModalNoWrap` (modal): box cao đúng border+header+rows — không row nào wrap
+    (guard width contract `modalSize` inner vs `.Width` outer). ✅
 
 - [x] **T11b — Tests shipped (state-machine baseline).** `palette_test.go` covers: `TestKeyMatchContract`,
   `TestCommandPaletteOpenClose`, `TestCommandPaletteFilter`, `TestCommandPaletteNav`,
@@ -1517,8 +1541,10 @@ Feature: Keymap registry & command palette
   `TestHelpRendersInView`. `-race` green. *(palette_test.go)* ✅
 
 - [x] **T12 — Visual verdict (modal).** Rendered palette + help **modal** frames at
-  80×24 and 60×24; visual-verdict PASS: box centered, rounded accent border, search
-  prompt at box top, background panes visible around the box, no row overflow. *(zz_dump_test.go)* ✅
+  80×24 and 60×24; visual-verdict PASS: box centered, rounded accent border (border-only,
+  no fill — interior khớp nền), `Commands` title + `╱` rule + plain `›` input at box top,
+  muted command rows with the cursor row a full-width accent bar, background panes visible
+  around the box, no row overflow. *(zz_dump_test.go: `TestDumpPaletteModalFrame`)* ✅
 
 - [ ] **T13 — Update existing PRDs cross-ref wording.** The bindings ARE migrated
   into the registry (code is consistent), but the prose cross-refs in
@@ -1539,8 +1565,8 @@ Feature: Keymap registry & command palette
 | `keys.go` *(mới)* | `type KeyMap struct` (~22 field); `defaultKeyMap() KeyMap` |
 | `commands.go` *(mới)* | `type Command struct{Name,Description,NeedsArg,Run}`; `defaultCommands() []Command`; `writeClipboard(text string) error`; `resolvePath(cwd, in string) (string, error)`; `errClipboardUnsupported` sentinel |
 | `model.go` | + field `keymap KeyMap` + palette state (`paletteStage`, `paletteQuery`, `paletteSecondaryInput`, `paletteCursor`, `paletteFiltered`) + help state (`helpTop`); + mode enum `modeCommandPalette`, `modeHelp`; + helper `enterCommandPalette`, `exitCommandPalette`, `applyPaletteFilter`, `enterHelp`, `exitHelp`, `shortHelp`, `fullHelp`; + handler `updateCommandPalette`, `updateHelp`; `updateNormal` refactor sang `key.Matches` dispatch (§5.3); `newModel` init `m.keymap = defaultKeyMap()`; `Update` switch thêm case `modeCommandPalette`, `modeHelp` |
-| `view.go` | `View()` composes the modal box over the background via `overlayCentered` (Canvas/Compositor/Layer, §5.6); `renderModal` + `modalSize` mới; `renderPaletteBody`/`renderHelpBody` (prompt ở đỉnh box); `renderPreviewRegion` **removed** (preview pane luôn render preview thật); `renderStatus` palette/help cases → modal short-help (§5.7); `renderShortHelp`/`shortHelp`/`fullHelp` unchanged |
-| `theme.go` | + `modalBoxStyle` (rounded border `colAccent` + opaque dark bg) + constants `modalTargetCols`/`modalTargetRows`, `modalMargin`, `modalMinCols`/`modalMinRows`; body reuse `cursorActiveStyle`/`dimStyle`/`fileStyle`/`promptStyle` |
+| `view.go` | `View()` composes the modal box over the background via `overlayCentered` (Canvas/Compositor/Layer, §5.6); `renderModal` (sizes box to outer = inner+frame; `.Width` is frame-inclusive) + `modalSize` mới; `renderPaletteBody`/`renderHelpBody` (`Commands` title + `╱` rule + `›` input at box top) + helpers `modalTitle`/`modalInput`/`gradientLine`/`lerp8`; `renderPreviewRegion` **removed** (preview pane luôn render preview thật); `renderStatus` palette/help cases → modal short-help (§5.7); `renderShortHelp`/`shortHelp`/`fullHelp` unchanged |
+| `theme.go` | + `modalBoxStyle` (rounded border `colAccent`, **border-only — no background fill**) + `modalAccentStyle` (title/caret) + constants `modalTargetCols`/`modalTargetRows`, `modalMargin`, `modalMinCols`/`modalMinRows`; body reuse `cursorActiveStyle`/`dimStyle`/`fileStyle` |
 | `keys_contract_test.go` *(mới)* | API verify dep (T1) |
 | `palette_test.go` *(mới)* | palette open/close/filter/run + cd valid/invalid + clipboard |
 | `help_test.go` *(mới)* | help open/scroll/close + q-doesn't-quit-app |

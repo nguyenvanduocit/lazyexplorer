@@ -68,6 +68,58 @@ func TestDumpFrames(t *testing.T) {
 	}
 }
 
+// TestDumpPaletteModalFrame is the visual-verdict harness for the crush-style
+// command-palette restyle (docs/prd-keymap-and-command-palette.md). It writes
+// two ANSI frames to $LAZYEXPLORER_DUMP_DIR so an external tool (freeze / vhs)
+// can render them to images and an agent (oh-my-claudecode:visual-verdict) can
+// check them against the design intent:
+//
+//	Frame wide   — 90x28: the floating box centered over the list/preview, a
+//	               "Commands" title with the accent→dim ╱ rule, a plain "› "
+//	               input (no prompt bar), and the muted command rows with the
+//	               cursor row a full-width accent bar.
+//	Frame narrow — 60x24: the same modal at the narrow horizontal-mode width;
+//	               title rule + rows still fit, nothing overflows or wraps.
+//
+// Run with:
+//
+//	LAZYEXPLORER_DUMP_DIR=/tmp/le-palette go test -run TestDumpPaletteModalFrame .
+func TestDumpPaletteModalFrame(t *testing.T) {
+	outDir := os.Getenv("LAZYEXPLORER_DUMP_DIR")
+	if outDir == "" {
+		t.Skip("set LAZYEXPLORER_DUMP_DIR to dump View() frames for visual verdict")
+	}
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// A small mix so the background panes have content behind the modal.
+	dir := t.TempDir()
+	for _, name := range []string{"main.go", "README.md", "notes.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(dir, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, f := range []struct {
+		name string
+		w, h int
+	}{
+		{"palette-wide-90x28", 90, 28},
+		{"palette-narrow-60x24", 60, 24},
+	} {
+		m := modelAt(t, dir, f.w, f.h)
+		m.renderStyle = "dark"
+		m.enterCommandPalette() // mode=palette, full command list, empty query
+		if err := os.WriteFile(filepath.Join(outDir, f.name+".ansi"), []byte(m.View().Content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 // TestDumpMiddleDividerFrames is the visual-verdict harness for
 // docs/prd-middle-divider.md §6 checklist 17. It writes two ANSI frames to
 // $LAZYEXPLORER_DUMP_DIR so an external tool (freeze / vhs) can render them

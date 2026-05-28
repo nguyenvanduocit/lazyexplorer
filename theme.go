@@ -55,15 +55,21 @@ var (
 			Padding(0, 1).
 			Bold(true)
 
-	// modalBoxStyle is the floating command-palette / help box: rounded accent
-	// border + opaque dark background so it reads as lifted off the panes behind
-	// it (D9/D22). One accent, the same colAccent as the cursor row.
+	// modalBoxStyle is the floating command-palette / help box: a rounded accent
+	// border around content that floats directly on the panes behind it — no
+	// background fill, matching crush's Dialog.View (border only). One accent,
+	// the same colAccent as the cursor row.
 	modalBoxStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(colAccent).
-			Background(lipgloss.Color("#1A1A1A")).
 			Foreground(colFg).
 			Padding(0, 1)
+
+	// modalAccentStyle tints the modal chrome accents — the "Commands" title
+	// label and the "›"/"▏" input caret — with the one accent, bold. Kept
+	// separate from renderingStyle (spinner) so the two can never drift onto
+	// the same knob despite sharing a value today (crush-style header).
+	modalAccentStyle = lipgloss.NewStyle().Foreground(colAccent).Bold(true)
 )
 
 // Modal sizing — OUTER box dims; inner content = outer − modalBoxStyle frame

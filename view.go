@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"image/color"
 	"strings"
 
 	"charm.land/bubbles/v2/key"
@@ -245,16 +246,19 @@ func overlayCentered(bg, box string, w, h int) string {
 
 // renderModal returns the styled, bordered box for the active overlay mode and
 // ok=true; in normal mode it returns ok=false (no overlay). modalSize hands the
-// body its inner dimensions; modalBoxStyle adds the border + padding frame.
-// .Width(bw) pins the box to the clamped inner width so short content does not
-// produce a too-narrow box and the border stays rectangular.
+// body its inner (text) dimensions; the box is sized to bw+fw because lipgloss
+// v2 .Width is the TOTAL outer width (border + padding included), so the inner
+// text area it leaves is exactly bw — what renderPaletteBody/renderHelpBody fit
+// their lines to. Passing bw alone would shrink the text area by fw and wrap the
+// widest rows.
 func (m model) renderModal() (string, bool) {
 	bw, bh := m.modalSize()
+	ow := bw + modalBoxStyle.GetHorizontalFrameSize() // outer width for .Width
 	switch m.mode {
 	case modeCommandPalette:
-		return modalBoxStyle.Width(bw).Render(m.renderPaletteBody(bw, bh)), true
+		return modalBoxStyle.Width(ow).Render(m.renderPaletteBody(bw, bh)), true
 	case modeHelp:
-		return modalBoxStyle.Width(bw).Render(m.renderHelpBody(bw, bh)), true
+		return modalBoxStyle.Width(ow).Render(m.renderHelpBody(bw, bh)), true
 	default:
 		return "", false
 	}
@@ -777,16 +781,15 @@ func (m model) renderStatus() string {
 func (m model) renderPaletteBody(w, h int) string {
 	var lines []string
 
-	// Row 0: search prompt (stage 0) or cd-arg prompt (stage 1).
+	// Header: "Commands" title + ╱ rule, then the plain "› query" input.
+	// Stage 1 swaps the title for the command name and edits its argument.
 	if m.paletteStage == 0 {
-		lines = append(lines, promptStyle.Background(colAccent).Foreground(colSelFg).
-			Render(fitWidth("> "+m.paletteQuery+"▏", w)))
+		lines = append(lines, modalTitle("Commands", w), modalInput(m.paletteQuery, w))
 	} else {
 		sel := m.paletteFiltered[m.paletteCursor]
-		lines = append(lines, promptStyle.Background(colAccent).Foreground(colSelFg).
-			Render(fitWidth(sel.Name+" > "+m.paletteSecondaryInput+"▏", w)))
+		lines = append(lines, modalTitle(sel.Name, w), modalInput(m.paletteSecondaryInput, w))
 	}
-	lines = append(lines, "") // blank between prompt and body
+	lines = append(lines, "") // blank between header and body
 
 	// Stage 1: description + any submit error, both inside the box.
 	if m.paletteStage == 1 {
@@ -798,24 +801,84 @@ func (m model) renderPaletteBody(w, h int) string {
 		return strings.Join(lines, "\n")
 	}
 
-	// Stage 0: filtered command rows; cursor row = full-width accent.
+	// Stage 0: filtered command rows; cursor row = full-width accent bar, the
+	// rest muted so the selection reads at a glance (crush list look).
 	if len(m.paletteFiltered) == 0 {
 		lines = append(lines, dimStyle.Render(fitWidth("(no matching commands)", w)))
 		return strings.Join(lines, "\n")
 	}
-	bodyRows := h - len(lines) // rows left under the prompt + blank
+	nameCol := 0
+	for _, c := range m.paletteFiltered {
+		if n := lipgloss.Width(c.Name); n > nameCol {
+			nameCol = n
+		}
+	}
+	nameCol += 2 // gap between the name column and its description
+	bodyRows := h - len(lines)
 	for i, c := range m.paletteFiltered {
 		if i >= bodyRows {
 			break
 		}
-		row := c.Name + "  — " + c.Description
+		row := fmt.Sprintf(" %-*s%s", nameCol, c.Name, c.Description)
 		if i == m.paletteCursor {
 			lines = append(lines, cursorActiveStyle.Width(w).Render(fitWidth(row, w)))
 		} else {
-			lines = append(lines, fileStyle.Render(fitWidth(row, w)))
+			lines = append(lines, dimStyle.Render(fitWidth(row, w)))
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+// modalTitle renders a crush-style header line: a bold accent label followed by
+// a ╱ rule that fades accent→dim and fills the row to width w. The rule is sized
+// at its exact plain width before coloring, so it needs no fitWidth — fitWidth
+// is not ANSI-aware (see its doc) and gradientLine emits per-rune SGR.
+func modalTitle(label string, w int) string {
+	head := modalAccentStyle.Render(label)
+	ruleW := w - lipgloss.Width(label) - 1 // 1 space between label and rule
+	if ruleW < 1 {
+		return fitWidth(label, w) // too narrow for a rule; bare label
+	}
+	return head + " " + gradientLine(strings.Repeat("╱", ruleW), colAccent, colDim)
+}
+
+// modalInput renders the plain "› query▏" prompt line: accent caret, default
+// query text, no background bar. The query is truncated so a long entry never
+// wraps — "› " (2) + the ▏ caret (1) reserve 3 cols.
+func modalInput(query string, w int) string {
+	q := fileStyle.Render(fitWidth(query, max(0, w-3)))
+	return modalAccentStyle.Render("›") + " " + q + modalAccentStyle.Render("▏")
+}
+
+// gradientLine paints each rune of s with a foreground linearly interpolated
+// from→to across its length — the crush title rule, our one accent dissolving
+// into the muted border. Empty s yields "".
+func gradientLine(s string, from, to color.Color) string {
+	rs := []rune(s)
+	n := len(rs)
+	if n == 0 {
+		return ""
+	}
+	fr, fg, fb, _ := from.RGBA()
+	tr, tg, tb, _ := to.RGBA()
+	var b strings.Builder
+	for i, r := range rs {
+		t := 0.0
+		if n > 1 {
+			t = float64(i) / float64(n-1)
+		}
+		col := lipgloss.Color(fmt.Sprintf("#%02X%02X%02X",
+			lerp8(fr, tr, t), lerp8(fg, tg, t), lerp8(fb, tb, t)))
+		b.WriteString(lipgloss.NewStyle().Foreground(col).Render(string(r)))
+	}
+	return b.String()
+}
+
+// lerp8 linearly interpolates two color channels (16-bit color.Color.RGBA
+// range) at t∈[0,1] and returns the 8-bit result.
+func lerp8(a, b uint32, t float64) uint8 {
+	av, bv := float64(a>>8), float64(b>>8)
+	return uint8(av + (bv-av)*t)
 }
 
 // renderHelpBody draws the full-help body for the modal: bindings grouped under

@@ -327,17 +327,20 @@ func TestSelectedAbsPathDotDot(t *testing.T) {
 	}
 }
 
-// TestPaletteBodyRenders: the palette body shows the search prompt at its top
-// and lists every command (name + description). This is the body-level
-// contract; modal composition into View() is covered by
+// TestPaletteBodyRenders: the palette body leads with the "Commands" title row
+// and the "›" input prompt, then lists every command (name + description). This
+// is the body-level contract; modal composition into View() is covered by
 // TestModalRendersPaletteInView (modal_test.go).
 func TestPaletteBodyRenders(t *testing.T) {
 	m := modelAt(t, t.TempDir(), 120, 30)
 	m, _ = press(t, m, tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
 	body := stripANSI(m.renderPaletteBody(56, 16))
-	first := strings.TrimSpace(strings.Split(body, "\n")[0])
-	if !strings.HasPrefix(first, ">") {
-		t.Errorf("palette body row 0 should start with the search prompt '>'; got %q", first)
+	rows := strings.Split(body, "\n")
+	if !strings.Contains(rows[0], "Commands") {
+		t.Errorf("palette body row 0 should be the 'Commands' title; got %q", rows[0])
+	}
+	if !strings.Contains(rows[1], "›") {
+		t.Errorf("palette body row 1 should be the '›' input prompt; got %q", rows[1])
 	}
 	for _, name := range []string{"reload", "copy path", "cd", "quit"} {
 		if !strings.Contains(body, name) {
