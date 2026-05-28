@@ -6,7 +6,7 @@
 > dễ hơn khi drag — đúng tinh thần "glance-friendly · UI simpler than superfile"
 > trong project `CLAUDE.md`.
 
-Status: **draft / chờ review** · Author: brainstorming session · Ngày: 2026-05-27
+Status: **accepted** · Author: brainstorming session · Ngày: 2026-05-27 · Shipped: 2026-05-28 (✅ borderless 2-col + " │ " divider live in `view.go`; `go build && go vet && go test ./...` green)
 
 ---
 
