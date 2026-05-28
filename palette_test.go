@@ -346,19 +346,26 @@ func TestPaletteBodyRenders(t *testing.T) {
 	}
 }
 
-// TestHelpRendersInView: with help open, View() shows group titles and at least
-// one binding row.
+// TestHelpRendersInView: with help open, View() composites a floating modal —
+// rounded border, the first group title visible at the box top, and the
+// background list pane still showing through. The modal box is height-clamped,
+// so lower groups (Mutation/Modes/Misc) reach view via the helpTop scroll and
+// are not all visible at the unscrolled top — that scroll is covered by
+// TestHelpScrollClamps. The full group set is asserted at the body level by
+// TestFullHelpGroups.
 func TestHelpRendersInView(t *testing.T) {
 	m := modelAt(t, t.TempDir(), 120, 40)
 	m, _ = press(t, m, tea.KeyPressMsg{Code: '?', Text: "?"})
 	out := ansi.Strip(m.View().Content)
-	for _, title := range []string{"Navigation", "Preview", "Mutation", "Modes", "Misc"} {
-		if !strings.Contains(out, title) {
-			t.Errorf("help View should show group %q; full:\n%s", title, out)
-		}
+	if !strings.Contains(out, "╭") {
+		t.Errorf("help View should composite a modal border; full:\n%s", out)
 	}
-	if !strings.Contains(out, "rename") {
-		t.Errorf("help View should list the rename binding; full:\n%s", out)
+	if !strings.Contains(out, "Navigation") {
+		t.Errorf("help modal should show the first group title 'Navigation'; full:\n%s", out)
+	}
+	// Background list pane still visible behind/around the floating box.
+	if !strings.Contains(out, "(empty directory)") {
+		t.Errorf("background list pane not visible behind the help modal; full:\n%s", out)
 	}
 }
 

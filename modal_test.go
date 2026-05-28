@@ -126,6 +126,25 @@ func TestPaletteBodyCdErrorInBox(t *testing.T) {
 	}
 }
 
+func TestModalRendersPaletteInView(t *testing.T) {
+	m := model{
+		mode: modeCommandPalette, width: 100, height: 30,
+		paletteFiltered: defaultCommands(), keymap: defaultKeyMap(),
+	}
+	// Give it some entries so the background (list pane) has content.
+	m.entries = []entry{{name: "alpha.go"}, {name: "beta.go"}}
+	out := m.View().Content
+	plain := stripANSI(out)
+	// The modal border is present (palette is a floating box, not a pane).
+	if !strings.Contains(plain, "╭") {
+		t.Errorf("View() did not composite the palette modal border")
+	}
+	// The background list is still visible behind/around the box.
+	if !strings.Contains(plain, "alpha.go") {
+		t.Errorf("background list pane not visible behind the modal")
+	}
+}
+
 func TestRenderModal(t *testing.T) {
 	// Normal mode → no modal.
 	if _, ok := (model{mode: modeNormal, width: 100, height: 30}).renderModal(); ok {

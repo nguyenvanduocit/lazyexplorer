@@ -311,7 +311,7 @@ func (m model) View() tea.View {
 
 			preview := lipgloss.NewStyle().
 				Width(g.leftInner).Height(g.bottomInner).
-				Render(m.renderPreviewRegion(g.leftInner, g.bottomInner))
+				Render(m.renderPreview(g.leftInner))
 
 			body = lipgloss.JoinVertical(lipgloss.Left, list, divider, preview)
 		} else {
@@ -323,7 +323,7 @@ func (m model) View() tea.View {
 
 			right := lipgloss.NewStyle().
 				Width(g.rightInner).Height(g.bodyH).
-				Render(m.renderPreviewRegion(g.rightInner, g.bodyH))
+				Render(m.renderPreview(g.rightInner))
 
 			// Divider column: bodyH copies of the 3-col strip. The middle glyph stays
 			// colDim; the pad col hugging the focused pane carries a half-block accent
@@ -343,6 +343,11 @@ func (m model) View() tea.View {
 			body = lipgloss.JoinHorizontal(lipgloss.Top, left, divider, right)
 		}
 		content = strings.Join([]string{body, m.renderStatus()}, "\n")
+
+		// Floating modal overlay (palette / help) drawn OVER the screen.
+		if box, ok := m.renderModal(); ok {
+			content = overlayCentered(content, box, m.width, m.height)
+		}
 	}
 
 	v := tea.NewView(content)
@@ -774,21 +779,6 @@ func (m model) renderStatus() string {
 		left := fitWidth(status, contentW-2)
 		pad := strings.Repeat(" ", max(0, contentW-2-lipgloss.Width(left)))
 		return statusBarStyle.Width(m.width).Render(left + pad + slot)
-	}
-}
-
-// renderPreviewRegion renders whatever occupies the preview pane area for the
-// current mode: the command palette, the help overlay, or the file/folder
-// preview. The palette and help take over the preview region rather than
-// floating in a dialog — there is no dialog stack to manage (D9/D10).
-func (m model) renderPreviewRegion(w, h int) string {
-	switch m.mode {
-	case modeCommandPalette:
-		return m.renderPaletteBody(w, h)
-	case modeHelp:
-		return m.renderHelpBody(w, h)
-	default:
-		return m.renderPreview(w)
 	}
 }
 
