@@ -4,18 +4,18 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>lazyexplorer — a terminal file explorer for the vibe-code workflow</title>
-<meta name="description" content="lazyexplorer is a tiny, lazygit-style terminal file explorer built to sit in the pane beside your coding agent. It refreshes live as files change — and never loses your place. Open source, MIT, written in Go." />
+<meta name="description" content="lazyexplorer is a deliberately small, lazygit-style terminal file explorer that sits in the pane beside your coding agent — just the tree and a preview, nothing to configure or manage. Less tooling, fewer distractions. Open source, MIT, written in Go." />
 
 <meta property="og:type" content="website" />
 <meta property="og:title" content="lazyexplorer — a terminal file explorer for the vibe-code workflow" />
-<meta property="og:description" content="A lazygit-style terminal file explorer. Live-refreshing, jailed to your project, keyboard + mouse. Go + Bubble Tea." />
+<meta property="og:description" content="A deliberately small terminal file explorer that sits beside your agent — the tree and a preview, nothing to manage. Less tooling, fewer distractions. Go + Bubble Tea." />
 <meta property="og:url" content="https://lazyexplorer.aiocean.dev/" />
 <meta property="og:image" content="https://lazyexplorer.aiocean.dev/media/og.png" />
 <meta property="og:image:width" content="1200" />
 <meta property="og:image:height" content="630" />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:title" content="lazyexplorer — a terminal file explorer for the vibe-code workflow" />
-<meta name="twitter:description" content="A lazygit-style terminal file explorer. Live-refreshing, jailed to your project, keyboard + mouse. Go + Bubble Tea." />
+<meta name="twitter:description" content="A deliberately small terminal file explorer that sits beside your agent — the tree and a preview, nothing to manage. Less tooling, fewer distractions. Go + Bubble Tea." />
 <meta name="twitter:image" content="https://lazyexplorer.aiocean.dev/media/og.png" />
 
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230C0C13'/%3E%3Cpath d='M12 9l9 7-9 7z' fill='%239B7DF9'/%3E%3C/svg%3E" />
@@ -272,11 +272,12 @@
    <div class="hmargin" aria-hidden="true"></div>
    <div class="hcontent">
     <p class="kicker rise" style="animation-delay:.08s">a lazygit-style terminal file explorer</p>
-    <h1 class="rise" style="animation-delay:.14s">A file tree that <span class="hl">keeps&nbsp;up</span> with your coding agent.<span class="cur" aria-hidden="true"></span></h1>
+    <h1 class="rise" style="animation-delay:.14s">A file tree that stays <span class="hl">out of your&nbsp;way</span>.<span class="cur" aria-hidden="true"></span></h1>
 
     <p class="lede rise" style="animation-delay:.26s">
-      lazyexplorer is a small, focused terminal explorer built to live in the pane
-      beside your agent. It refreshes <span class="hl">live</span> as files change — and never loses your place.
+      lazyexplorer is a deliberately small terminal explorer that sits in the pane beside your
+      agent — just the tree and a preview. <span class="hl">Nothing to configure</span>, no panels
+      to arrange, nothing competing for your attention. It refreshes on its own, so you can forget it's there.
     </p>
 
     <div class="cmd rise" style="animation-delay:.34s">
@@ -314,18 +315,17 @@
   <section class="rec" id="why">
     <div class="idx reveal"><span class="n">01</span><span class="lbl">why it exists</span></div>
     <div class="prose reveal">
-      <p>Coding agents touch dozens of files a minute.</p>
+      <p>Less tooling, not more.</p>
       <p class="run">
-        Your editor's sidebar lags behind, your <span class="mono-inline">ls</span> goes stale
-        the moment you run it, and <span class="mono-inline">git&nbsp;status</span> only tells
-        you half the story. lazyexplorer sits in the pane beside the agent and shows the project
-        as it actually is, right now — folders, files, rendered previews — refreshing every
-        second without you lifting a finger.
+        Working with an agent already crowds the screen — its output, diffs, tool calls, your own
+        shell. Reach for a heavyweight file manager or a second editor beside it and you're
+        managing windows instead of doing the work.
       </p>
       <p class="run">
-        It is not your editor and not a full file manager. It does one job: let you glance over
-        and instantly see what just changed. Smaller on purpose, so it fits the cramped pane
-        where you actually keep it.
+        lazyexplorer goes the other way: one small pane with the tree and a rendered preview, and
+        nothing else to arrange or learn. It refreshes on its own, so you never stop to poke at it —
+        glance, see what changed, get back to the agent. Small on purpose, so it stays out of the
+        way instead of becoming one more thing to manage.
       </p>
     </div>
   </section>
