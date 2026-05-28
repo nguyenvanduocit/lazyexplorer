@@ -6,9 +6,11 @@ package main
 // Two layers under test:
 //   * fitRow(name, size, w) — pure helper: place name left, size right (one
 //     space minimum between), or drop size and truncate name when too narrow.
-//   * renderEntryRow(e, w, active) — composes fitRow with theme styling and
-//     the caret column, the *single* place a row is drawn for both list pane
-//     and folder preview, so the two panes can never drift in format.
+//   * renderEntryRow(e, w, active, listFocused) — composes fitRow with theme
+//     styling and the caret column, the *single* place a row is drawn for both
+//     list pane and folder preview, so the two panes can never drift in format.
+//     listFocused only tunes the active row's highlight (accent vs dim); the
+//     pane-focus dim behaviour is pinned in focus_test.go.
 
 import (
 	"os"
@@ -122,7 +124,7 @@ func TestFitRowCJKWidth(t *testing.T) {
 // styled with dirStyle (we detect by checking colDir in the ANSI), and starts
 // with the two-space caret slot.
 func TestRenderEntryRowDirInactive(t *testing.T) {
-	got := renderEntryRow(entry{name: "src", isDir: true}, 20, false)
+	got := renderEntryRow(entry{name: "src", isDir: true}, 20, false, true)
 	plain := ansi.Strip(got)
 	if !strings.HasPrefix(plain, "  ") {
 		t.Errorf("inactive row must start with the 2-col caret slot; got %q", plain)
@@ -138,7 +140,7 @@ func TestRenderEntryRowDirInactive(t *testing.T) {
 // TestRenderEntryRowParentDotsHasNoSlash: the synthetic ".." dir entry must
 // NOT get a trailing "/" (FR2, matches current renderList behaviour).
 func TestRenderEntryRowParentDotsHasNoSlash(t *testing.T) {
-	got := renderEntryRow(entry{name: "..", isDir: true}, 20, false)
+	got := renderEntryRow(entry{name: "..", isDir: true}, 20, false, true)
 	plain := ansi.Strip(got)
 	if strings.Contains(plain, "../") {
 		t.Errorf("\"..\" must NOT carry a trailing slash; got %q", plain)
@@ -151,7 +153,7 @@ func TestRenderEntryRowParentDotsHasNoSlash(t *testing.T) {
 // TestRenderEntryRowFileShowsSize: file inactive row carries the human size,
 // proving the list pane now gets the size column (D3/FR3).
 func TestRenderEntryRowFileShowsSize(t *testing.T) {
-	got := renderEntryRow(entry{name: "main.go", isDir: false, size: 1234}, 30, false)
+	got := renderEntryRow(entry{name: "main.go", isDir: false, size: 1234}, 30, false, true)
 	plain := ansi.Strip(got)
 	if !strings.Contains(plain, "main.go") {
 		t.Errorf("file name missing; got %q", plain)
@@ -170,7 +172,7 @@ func TestRenderEntryRowFileShowsSize(t *testing.T) {
 // cursor highlight already paints a single bright foreground over the whole
 // row, and a dim-on-accent size would be unreadable.
 func TestRenderEntryRowFileSizeMutedInactive(t *testing.T) {
-	got := renderEntryRow(entry{name: "main.go", isDir: false, size: 4242}, 30, false)
+	got := renderEntryRow(entry{name: "main.go", isDir: false, size: 4242}, 30, false, true)
 	size := humanSize(4242)
 	dim := dimColorANSI(t)
 	// dimStyle.Render(size) emits "<dim-SGR>size<reset>". The row therefore
@@ -187,7 +189,7 @@ func TestRenderEntryRowFileSizeMutedInactive(t *testing.T) {
 // w columns (cursorActiveStyle.Width(w) pads the row so the highlight covers
 // the whole pane width — same behaviour as the existing renderList).
 func TestRenderEntryRowActiveCaretAndWidth(t *testing.T) {
-	got := renderEntryRow(entry{name: "main.go", isDir: false, size: 100}, 30, true)
+	got := renderEntryRow(entry{name: "main.go", isDir: false, size: 100}, 30, true, true)
 	plain := ansi.Strip(got)
 	if !strings.HasPrefix(plain, "▶ ") {
 		t.Errorf("active row must start with caret; got %q", plain)
@@ -204,7 +206,7 @@ func TestRenderEntryRowActiveCaretAndWidth(t *testing.T) {
 // padded to full w — only the active row gets full-width highlight. Width
 // stays ≤ w, which prevents accidental background bleeding through fileStyle.
 func TestRenderEntryRowInactiveDoesNotForcePad(t *testing.T) {
-	got := renderEntryRow(entry{name: "x.go", isDir: false, size: 1}, 30, false)
+	got := renderEntryRow(entry{name: "x.go", isDir: false, size: 1}, 30, false, true)
 	if w := lipgloss.Width(got); w > 30 {
 		t.Errorf("inactive row width = %d, must not exceed w=30; got %q", w, got)
 	}
@@ -219,8 +221,8 @@ func TestRenderEntryRowInactiveDoesNotForcePad(t *testing.T) {
 // on.
 func TestRenderEntryRowConsistencyAcrossPanes(t *testing.T) {
 	e := entry{name: "main.go", isDir: false, size: 4242}
-	a := renderEntryRow(e, 40, false)
-	b := renderEntryRow(e, 40, false)
+	a := renderEntryRow(e, 40, false, true)
+	b := renderEntryRow(e, 40, false, true)
 	if a != b {
 		t.Errorf("renderEntryRow not deterministic for same input:\n a=%q\n b=%q", a, b)
 	}

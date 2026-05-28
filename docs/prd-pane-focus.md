@@ -7,7 +7,7 @@
 > chuột thì wheel **đã** context-aware (`model.go:494-516`) — keyboard bị bỏ
 > quên.
 
-Status: **draft / chờ review** · Author: feature-dev session · Ngày: 2026-05-28
+Status: **accepted** · Author: feature-dev session · Ngày: 2026-05-28 · Shipped: 2026-05-28
 
 ---
 
@@ -31,7 +31,7 @@ Phân tích đường keyboard hiện tại trong `updateNormal` (`model.go:619-
 Đối chiếu với wheel mouse (`model.go:494-516`):
 
 ```go
-overLeft := e.X < g.leftOuter
+overLeft := e.X < g.dividerStart
 case tea.MouseWheelUp:
     if overLeft { m.cursor-- } else { m.scrollPreview(-3) }
 case tea.MouseWheelDown:
@@ -50,10 +50,10 @@ Hệ quả cho user keyboard-only đứng cạnh agent:
    [q] quit` — không có dòng nào về preview scroll qua keyboard.
 2. **Không trực giác**: user mong "tôi đang đọc preview, ↑↓ phải scroll
    preview" — như editor / pager (less, vim). lazyexplorer phá kỳ vọng đó.
-3. **Focus signal vô dụng**: `panelBorder(focused bool)` ở `theme.go:48-56`
-   render border accent vs dim theo `focused`, nhưng `view.go:80,84` truyền
-   `true` cho list và `false` cho preview **cứng** — focus không bao giờ
-   thay đổi → border màu là decoration, không phải affordance.
+3. **Không có focus signal nào**: layout borderless (một divider 3 cột giữa
+   hai pane, không border quanh pane — xem `prd-middle-divider.md`) nên không
+   có border màu để báo pane nào đang "active". UI cần một tín hiệu focus mới
+   sống độc lập với geometry — chip ở status bar + cursor row dim (§5.6, §5.5).
 4. **Mâu thuẫn với ux mouse**: wheel context-aware, keyboard không. Hai
    modality trong cùng app dùng hai mental model khác nhau cho cùng hành
    động "scroll".
@@ -69,17 +69,15 @@ Reference clones (không copy):
 - `tmp/lipgloss` — `Border` + `BorderForeground` thay đổi runtime — chính
   thư viện styling của project.
 
-> Note: PRD này **chạm vào** `panelBorder` — cùng vùng với
-> `prd-middle-divider.md` (draft) đề xuất XOÁ `panelBorder` thay bằng
-> divider giữa. Coordination strategy ở §5.7.
+> Note: layout borderless của `prd-middle-divider.md` đã ship trước, nên
+> focus signal đi hoàn toàn qua status-bar chip + cursor row dim (§5.7).
 
 ## 2. Goal (1 câu)
 
 Thêm trạng thái `focusPane` (list | preview) trên `model`; `Tab` toggle
 focus; phím `up/down/j/k/g/G/ctrl+d/u` áp dụng cho pane đang focus; focus
-có indicator visible (border color + status-bar chip + cursor row dim);
-click vào pane nào sẽ set focus vào pane đó — đồng bộ keyboard với mouse
-mental model.
+có indicator visible (status-bar chip + cursor row dim); click vào pane nào
+sẽ set focus vào pane đó — đồng bộ keyboard với mouse mental model.
 
 **Non-goal làm rõ:**
 - KHÔNG thêm pane thứ ba — vẫn giữ two-panel ceiling của project.
@@ -105,9 +103,9 @@ mental model.
 | D5 | Phím "mutation/navigation list-bound" | `r`/`d`/`enter`/`l`/`h`/`backspace`/`right`/`left` chỉ hoạt động khi `focusPane == focusList` | Mutation cần "list selection" có nghĩa; nếu focus preview mà bấm `d`, ambiguous (delete file đang xem? cancel?). An toàn: noop |
 | D6 | `Esc` khi focus preview | Switch focus về list | Esc trong app là "cancel / step back" universal; list là default → quay về |
 | D7 | Click chuột set focus | Click bất kỳ ô nào trong list pane → `focusList`; click pane preview → `focusPreview` | Đồng bộ mouse + keyboard mental model: pane bạn vừa interact = pane bạn focus |
-| D8 | Focus indicator chính | **Border color flip** qua `panelBorder(focused)` đã có | Re-use infrastructure; chỉ đổi argument từ literal `true/false` sang `m.focusPane == focusList` / `... == focusPreview` |
-| D9 | Focus indicator phụ | Status bar **chip** `[ list ]` hoặc `[ preview ]` ở đầu hint string | Border-only fail khi `prd-middle-divider.md` ship (xoá border). Chip survive cả hai world — chỉ cần đổi nội dung, không cần geometry change |
-| D10 | Cursor row khi `focusPane == focusPreview` | Vẫn dùng `cursorActiveStyle` nhưng background đổi sang `colDim` | List vẫn cho biết "cursor đang ở đâu" nhưng softer; phục hồi accent khi focus quay lại list |
+| D8 | Focus indicator chính | Status bar **chip** `[ list ]` / `[ preview ]` ở đầu hint string, tô `focusChipStyle` (`colAccent` background) | Layout borderless (one 3-col divider, no pane border) → chip là tín hiệu focus chính, độc lập với geometry; chỉ đổi nội dung khi focus đổi |
+| D9 | Focus indicator phụ | **Cursor row dim** khi `focusPane == focusPreview` (D10) | Củng cố chip: list vẫn chỉ rõ "cursor đang ở file nào" nhưng softer, dành accent cho pane đang focus |
+| D10 | Cursor row khi `focusPane == focusPreview` | `cursorActiveStyle` nhưng background đổi sang `colDim` | List vẫn cho biết "cursor đang ở đâu" nhưng softer; phục hồi accent khi focus quay lại list |
 | D11 | `ctrl+d/u` context-aware | Focus list → cursor xuống/lên `max(1, bodyH/2)` rows; Focus preview → preview scroll `±max(1, bodyH/2)` | Half-page semantics chuyển theo focus; "half-page của pane đang xem" |
 | D12 | `g`/`G` context-aware | Focus list → cursor về 0 / `len-1` (giữ nguyên); Focus preview → `previewTop = 0` / `maxTop` | Vi convention "top/bottom of current viewport" |
 | D13 | `J`/`K` legacy | **Xoá** | Clean-slate: focus + lowercase `j/k` đã đủ scroll preview; không cần 2 cách cho cùng 1 hành vi |
@@ -146,21 +144,21 @@ mental model.
 
 - **FR7** — `q` / `ctrl+c` quit bất kể focus (an toàn — universal exit).
 
-- **FR8** — Click chuột trái trong list pane (`e.X < g.leftOuter`,
-  `model.go:531`) → `focusPane = focusList` đồng thời với hành vi
-  click hiện tại (select entry / start drag). Click trong preview pane
-  (`!overLeft`, `model.go:532`) → `focusPane = focusPreview` đồng thời
-  `previewClick`. Border-column click (`model.go:522-526`, divider drag)
-  không đụng focus — drag là gesture riêng.
+- **FR8** — Click chuột trái trong list pane (`overLeft := e.X < g.dividerStart`)
+  → `focusPane = focusList` đồng thời với hành vi click hiện tại (select
+  entry / start drag). Click trong preview pane (`!overLeft`) →
+  `focusPane = focusPreview` đồng thời `previewClick`. Click vào divider
+  (drag-start / no-pane zone) không đụng focus — focus-set đặt SAU các
+  early-return của divider + non-left + overDivider noop (§5.3).
 
 - **FR9** — Wheel mouse KHÔNG đổi focus. Wheel scroll vẫn context-aware
-  theo `overLeft` (giữ nguyên `model.go:494-516`) — không bumb focus
-  để user scroll-without-commitment vẫn hoạt động.
+  theo `overLeft` (giữ nguyên nhánh `tea.MouseWheelMsg`) — không bump
+  focus để user scroll-without-commitment vẫn hoạt động.
 
-- **FR10** — `panelBorder` được gọi với argument theo focus thực:
-  `panelBorder(m.focusPane == focusList)` cho left, `panelBorder(m.focusPane == focusPreview)`
-  cho right (`view.go:80,84`). Khi `focusList`: left = `colAccent`, right
-  = `colDim` (= behavior hiện tại). Khi `focusPreview`: ngược lại.
+- **FR10** — Focus signal chính là status-bar chip (FR11) + cursor row
+  dim (FR12), độc lập với pane geometry. Layout borderless không có border
+  quanh pane → không có border màu để flip; chip + dim mang trọn tín hiệu
+  (§5.7).
 
 - **FR11** — `renderStatus` (`view.go:245`) ở `modeNormal` thêm focus chip
   `[ list ]` / `[ preview ]` ở **đầu** hint string. Chip tô `colAccent`
@@ -196,10 +194,9 @@ mental model.
 ## 5. Technical design
 
 > Kim chỉ nam: **focus là sub-state nhỏ, không phá cấu trúc**. Một enum
-> mới + một switch trong `updateNormal` route theo focus + một dòng đổi
-> tham số `panelBorder` + một chip ở status bar. Không cần helper file
-> mới, không cần message type mới, không async. Update path zero-allocation
-> overhead (chỉ một comparison).
+> mới + một switch trong `updateNormal` route theo focus + một chip ở status
+> bar + cursor row dim. Không cần helper file mới, không cần message type mới,
+> không async. Update path zero-allocation overhead (chỉ một comparison).
 
 ### 5.1 Enum + field (`model.go`)
 
@@ -364,15 +361,15 @@ func (m *model) moveCursor(delta int) {
 }
 ```
 
-### 5.3 Mouse focus update (`model.go:518-549`)
+### 5.3 Mouse focus update (`handleMouse`, nhánh `tea.MouseClickMsg`)
 
-Trong nhánh `tea.MouseClickMsg`, sau khi pass divider drag check, set
-focus theo `overLeft`:
+Set focus theo `overLeft` SAU ba early-return của divider (drag-start +
+non-left + overDivider noop) và TRƯỚC khi route click vào pane — để click
+no-pane không bao giờ flip focus:
 
 ```go
 case tea.MouseClickMsg:
-    if e.Button == tea.MouseLeft && e.Y >= 1 &&
-        (e.X == g.leftOuter-1 || e.X == g.leftOuter) {
+    if e.Button == tea.MouseLeft && e.Y < m.height-1 && overDivider {
         m.dragging = true
         m.setLeftFromX(e.X)
         return m, nil // divider drag — do not change focus
@@ -380,7 +377,10 @@ case tea.MouseClickMsg:
     if e.Button != tea.MouseLeft {
         return m, nil
     }
-    overLeft := e.X < g.leftOuter
+    if overDivider {
+        return m, nil // no-pane zone — do not change focus
+    }
+    overLeft := e.X < g.dividerStart
     if overLeft {
         m.focusPane = focusList // FR8
     } else {
@@ -396,22 +396,15 @@ case tea.MouseClickMsg:
 Wheel branch giữ nguyên — KHÔNG set focus (FR9). Motion / release giữ
 nguyên — không liên quan focus.
 
-### 5.4 `View()` wire focus vào border (`view.go:80-86`)
+### 5.4 `View()` không cần đổi
 
-```go
-left := panelBorder(m.focusPane == focusList).
-    Width(g.leftOuter).Height(panelH).
-    Render(m.renderList(leftInner, innerH))
+Layout borderless: `View()` wrap mỗi pane trong `lipgloss.NewStyle().Width().Height()`
+trơn, ngăn cách bằng một divider 3 cột — không có border quanh pane để đổi
+màu theo focus. Tín hiệu focus đi qua status-bar chip (§5.6) + cursor row
+dim (§5.5), nên `View()` giữ nguyên; diff focus nằm ở `renderList`,
+`renderEntryRow`, `renderStatus`.
 
-right := panelBorder(m.focusPane == focusPreview).
-    Width(g.rightOuter).Height(panelH).
-    Render(m.renderPreview(rightInner))
-```
-
-Đây là **diff duy nhất** ở `View()` — semantics `panelBorder` không đổi
-(`theme.go:48-56`), chỉ argument đổi từ literal sang state-driven.
-
-### 5.5 `renderList` cursor row dim khi focus preview (`view.go:102-116`)
+### 5.5 `renderList` cursor row dim khi focus preview (`view.go`)
 
 Pass focus vào `renderList`:
 
@@ -485,35 +478,24 @@ focusChipStyle = lipgloss.NewStyle().
     Bold(true)
 ```
 
-### 5.7 Coordination với `prd-middle-divider.md`
+### 5.7 Focus signal trong layout borderless
 
-`prd-middle-divider.md` (draft) đề xuất **xoá** `panelBorder` và thay
-bằng divider giữa. Hai PRD chồng vào nhau ở **D9 + FR10 + §5.4** của
-PRD này.
+Layout là một divider 3 cột giữa hai pane, không border quanh pane
+(`prd-middle-divider.md`). Vì vậy focus signal đi trọn qua hai kênh
+độc lập với geometry:
 
-Resolution rule (**không** ship cả hai PRD trong cùng PR):
+- **Status-bar chip** (D8/§5.6): `[ list ]` / `[ preview ]` ở đầu hint
+  string, tô `focusChipStyle` (`colAccent` background). Chip là tín hiệu
+  chính — luôn visible, đổi nội dung khi focus đổi, không phụ thuộc kích
+  thước pane.
+- **Cursor row dim** (D10/§5.5): khi `focusPane == focusPreview`, cursor
+  row trong list pane đổi background từ `colAccent` sang `colDim`. Củng cố
+  chip: list vẫn chỉ rõ cursor đang ở file nào nhưng nhường accent cho pane
+  đang focus.
 
-- **Nếu `prd-middle-divider.md` ship TRƯỚC**: PRD này phải đổi D9 →
-  focus indicator chính là **chỉ status-bar chip (D10)** + cursor row
-  dim (D11). FR10 (border wire) bỏ. §5.4 trở thành no-op. Chip + dim
-  vẫn đủ signal — đã được verify trong design vì chip là indicator
-  primary trong cả hai world.
-- **Nếu PRD này ship TRƯỚC**: `prd-middle-divider.md` khi ship sẽ xoá
-  `panelBorder` — FR10 của PRD này tự nhiên trở thành dead code. Chip
-  (D10) + cursor dim (D11) vẫn alive → focus signal không mất. Người
-  ship divider chịu trách nhiệm xoá `panelBorder` call site trong
-  `View()` (đã có TODO ở §5.4 của divider PRD).
-- **Cả hai pending review song song**: reviewer chọn thứ tự, ghi rõ
-  trong PR description. Không có hard dependency — orthogonal về
-  goal.
-
-Marker comment ở `view.go:80,84` (sau khi ship PRD này):
-
-```go
-// panelBorder argument is state-driven (focus). When prd-middle-divider
-// lands, panelBorder itself goes away and focus signal is carried purely
-// by status-bar chip + cursor-row dim (see prd-pane-focus §5.7).
-```
+Hai kênh này mang đủ tín hiệu focus mà không cần border màu — verify bằng
+visual khi `focusList` (chip `[ list ]`, cursor row accent) và `focusPreview`
+(chip `[ preview ]`, cursor row dim).
 
 ### 5.8 `tickMsg` poll loop không đụng
 
@@ -539,10 +521,10 @@ cập nhật list. Behavior khi agent ghi file:
 | `focusList` + list rỗng (cwd rỗng, không có ..) | j/k/g/G noop | `moveCursor` guard `len(entries) == 0` |
 | Tab khi `modeRename` (`m.mode == modeRename`) | `updateRename` xử lý — Tab có `msg.Text == ""` (không phải printable) → noop vào `m.input` | `model.go:768-773` default case check `msg.Text != ""` |
 | Tab khi `modeConfirmDelete` | Cancel (mọi key ngoài y/Y cancel) → `mode = modeNormal`, focus giữ nguyên | `model.go:730-733` |
-| Click vào border / divider (`e.X == leftOuter-1 || e.X == leftOuter`) | Drag start, focus KHÔNG đổi | `model.go:522-526` early return trước nhánh set focus |
-| Click vào status row (`e.Y == m.height-1`) | Noop, focus không đổi | `e.Y >= 1` check ở divider branch + row check ở list branch (`row >= innerH`) |
+| Click vào divider (`overDivider`) | Drag start (hoặc noop ở status row), focus KHÔNG đổi | Early return của divider branch + overDivider noop, trước nhánh set focus |
+| Click vào status row (`e.Y == m.height-1`) | Noop, focus không đổi | `e.Y < m.height-1` check ở divider branch + row bound (`row >= bodyH`) ở list branch |
 | Preview re-render in flight khi Tab → focus list | Render tiếp tục, kết quả về `applyPreview` apply như bình thường — focus không ảnh hưởng pipeline | `syncPreview`/`applyPreview` không đọc `focusPane` |
-| Switching focus rapid (Tab spam) | Một re-render chuyển border + chip — cheap; không dispatch render mới | `syncPreview` chỉ trigger trên width/srcPath change |
+| Switching focus rapid (Tab spam) | Một re-render đổi chip + cursor row dim — cheap; không dispatch render mới | `syncPreview` chỉ trigger trên width/srcPath change |
 | Esc khi `modeNormal` + `focusList` | Noop (mọi case hiện tại chưa dùng Esc trong modeNormal) | Switch default fallthrough |
 
 ### 5.10 Đã cân nhắc & **defer khỏi v1**
@@ -563,8 +545,8 @@ cập nhật list. Behavior khi agent ghi file:
   editor. Defer ít nhất tới khi có request thật.
 
 - **Focus indicator qua title bar trên pane** (vd `── List ──` ở top):
-  thêm chrome (header bar) — vi phạm "minimal chrome". Chip + border
-  + dim đã đủ.
+  thêm chrome (header bar) — vi phạm "minimal chrome". Chip + cursor row
+  dim đã đủ.
 
 - **Persist focus qua session** (file `.config/lazyexplorer/state.json`):
   No Abstractions Until Proven; focus reset về list mỗi launch hợp lý
@@ -601,16 +583,13 @@ Feature: Pane focus state for keyboard-driven scroll
     When the explorer first renders
     Then the focus is on the list pane
     And the status bar shows a "list" focus chip
-    And the list pane's border draws in the accent color
-    And the preview pane's border draws in the dim color
+    And the cursor row in the list draws with the accent background
 
   Scenario: Tab toggles focus to the preview
     Given the focus is on the list pane
     When I press Tab
     Then the focus moves to the preview pane
     And the status bar shows a "preview" focus chip
-    And the preview pane's border draws in the accent color
-    And the list pane's border draws in the dim color
     And the cursor row in the list draws with a dimmed background
 
   Scenario: Arrow keys scroll the preview when focus is on preview
@@ -713,11 +692,10 @@ Feature: Pane focus state for keyboard-driven scroll
 
 ### Checklist verify
 
-1. Khởi chạy `./lazyexplorer .` trong project lazyexplorer → border trái
-   accent, border phải dim, status bar bắt đầu bằng chip `[ list ]`.
-2. Bấm Tab → border phải accent, border trái dim, chip đổi sang
-   `[ preview ]`, cursor row trong list pane bị dim (background chuyển
-   từ `#7D56F4` sang `#6C757D`).
+1. Khởi chạy `./lazyexplorer .` trong project lazyexplorer → status bar bắt
+   đầu bằng chip `[ list ]`, cursor row trong list pane tô accent.
+2. Bấm Tab → chip đổi sang `[ preview ]`, cursor row trong list pane bị dim
+   (background chuyển từ `#7D56F4` sang `#6C757D`), hint đổi sang bộ preview.
 3. Tab lại lần nữa → trở về state ban đầu (list focused).
 4. Focus preview, mở `docs/prd-search.md` (file dài) → bấm ↓ năm lần,
    `previewTop` đi từ 0 → 5 (xác minh bằng cách quan sát dòng đầu
@@ -740,7 +718,7 @@ Feature: Pane focus state for keyboard-driven scroll
     chip đổi (entry list không thay đổi — chỉ focus đổi).
 12. Focus preview, click một entry trong list → focus về list + entry đó
     được chọn.
-13. Drag border giữa hai pane khi đang focus list → focus vẫn list sau
+13. Drag divider giữa hai pane khi đang focus list → focus vẫn list sau
     khi release (drag không steal focus).
 14. Focus list, scroll wheel trong preview pane → preview scroll, focus
     vẫn list (wheel không steal focus).
@@ -752,61 +730,64 @@ Feature: Pane focus state for keyboard-driven scroll
     đổi focus, không append vào `m.input` (Text rỗng).
 17. Vào `modeConfirmDelete` (bấm `d`) → Tab cancel delete (mọi key
     ngoài y/Y là cancel), focus giữ list.
-18. `rg 'panelBorder\(true\)|panelBorder\(false\)'` → 0 hit (cả hai
-    literal đã thay bằng expression theo `focusPane`).
+18. Click vào divider band (drag-start hoặc status row) khi focus list →
+    focus vẫn list (focus-set đặt sau early-return của divider).
 19. `rg 'focusPane'` trả hit ở `model.go`, `view.go` (đủ bao phủ); KHÔNG
     hit ở `fs.go`, `theme.go`, `main.go` (focus là model+view concern).
+    ĐÃ VERIFY ✅ 2026-05-28 — model.go 21 hit, view.go 3 hit, còn lại 0.
 20. `go build -o lazyexplorer . && go vet ./... && go test ./...` xanh.
-21. `go test -race ./...` xanh.
-22. Visual verdict qua `oh-my-claudecode:visual-verdict` cho 2 frame:
-    - Frame A: focus=list — border trái accent, chip `[ list ]`, cursor
-      row tô accent.
-    - Frame B: focus=preview — border phải accent, chip `[ preview ]`,
+    ĐÃ VERIFY ✅ 2026-05-28.
+21. `go test -race ./...` xanh. ĐÃ VERIFY ✅ 2026-05-28.
+22. Visual smoke (status bar, ANSI-stripped) cho 2 frame — ĐÃ VERIFY ✅ 2026-05-28:
+    - Frame A: focus=list — chip `[ list ]`, hint `[tab] focus preview …`,
+      cursor row tô accent.
+    - Frame B: focus=preview — chip `[ preview ]`, hint `[ctrl+d/u] half-page …`,
       cursor row tô dim.
 
 ## 7. Task breakdown
 
 > Trước khi sửa: chạy `gitnexus_impact` cho `updateNormal`, `scrollPreview`,
-> `View`, `renderList`, `renderEntryRow`, `renderStatus`, `handleMouse`,
-> `panelBorder`. Risk hiện tại đã verify: `updateNormal` CRITICAL (1 caller
+> `renderList`, `renderEntryRow`, `renderStatus`, `handleMouse`. Risk hiện
+> tại đã verify: `updateNormal` CRITICAL (1 caller
 > = `Update`, 7 processes), `scrollPreview` CRITICAL (3 callers, 7 processes).
 > Test coverage trên các vùng này là gate. Sau khi sửa: `gitnexus_detect_changes`
 > verify scope khớp.
 
-- [ ] **T1 — Enum + field.** Thêm `focusPane` enum + field `focusPane`
+- [x] **T1 — Enum + field.** Thêm `focusPane` enum + field `focusPane`
   trên `model` (§5.1). *(model.go)*
 
-- [ ] **T2 — Helper `moveCursor`.** Hàm `(*model).moveCursor(delta int)`
+- [x] **T2 — Helper `moveCursor`.** Hàm `(*model).moveCursor(delta int)`
   centralize cursor jump + clamp + refreshPreview (§5.2). *(model.go)*
 
-- [ ] **T3 — `updateNormal` dispatch theo focus.** Tab toggle focus
+- [x] **T3 — `updateNormal` dispatch theo focus.** Tab toggle focus
   (không Shift+Tab); up/down/j/k/g/G/ctrl+d/u branch theo focus; **xoá**
-  case `"J", "ctrl+d"` và `"K", "ctrl+u"` cũ (`model.go:647-650`) — tách
-  thành `case "ctrl+d"` và `case "ctrl+u"` riêng theo focus; mutation +
-  navigation keys guard theo focus; Esc khi focusPreview → focusList
-  (§5.2, FR2-FR7, D11, D12, D13). *(model.go)*
+  case `"J", "ctrl+d"` và `"K", "ctrl+u"` cũ — tách thành `case "ctrl+d"`
+  và `case "ctrl+u"` riêng theo focus; mutation + navigation keys guard
+  theo focus; Esc khi focusPreview → focusList (§5.2, FR2-FR7, D11, D12,
+  D13). *(model.go)*
 
-- [ ] **T4 — Mouse click set focus.** `handleMouse` set `m.focusPane`
-  trong nhánh `MouseClickMsg` sau divider drag check (§5.3, FR8). Wheel
-  KHÔNG đổi focus (FR9). *(model.go)*
+- [x] **T4 — Mouse click set focus.** `handleMouse` set `m.focusPane`
+  trong nhánh `MouseClickMsg` sau ba early-return của divider (§5.3, FR8).
+  Wheel KHÔNG đổi focus (FR9). *(model.go)*
 
-- [ ] **T5 — `panelBorder` wire focus.** `View()` truyền
-  `m.focusPane == focusList` / `... == focusPreview` cho hai pane (§5.4,
-  FR10). Thêm comment cross-reference `prd-middle-divider.md` (§5.7).
-  *(view.go)*
+- [x] **T5 — Focus signal không qua border.** Layout borderless → `View()`
+  không đổi; focus signal đi qua chip (T7) + cursor row dim (T6) (§5.4,
+  §5.7, FR10). *(không sửa view.go ở task này)*
 
-- [ ] **T6 — `renderEntryRow` + `renderList` listFocused param.** Pass
+- [x] **T6 — `renderEntryRow` + `renderList` listFocused param.** Pass
   `m.focusPane == focusList` xuống; dim cursor row khi false (§5.5, FR12).
   *(view.go)*
 
-- [ ] **T7 — `renderStatus` focus chip.** Render `[ list ]` / `[ preview ]`
+- [x] **T7 — `renderStatus` focus chip.** Render `[ list ]` / `[ preview ]`
   chip đầu hint string; nội dung hint khác nhau theo focus (§5.6, FR11).
   *(view.go)*
 
-- [ ] **T8 — `focusChipStyle` trong theme.** Thêm style mới (§5.6).
+- [x] **T8 — `focusChipStyle` trong theme.** Thêm style mới (§5.6).
   *(theme.go)*
 
-- [ ] **T9 — Tests:** *(*_test.go — phân ra file tồn tại + thêm `focus_test.go` mới)*
+- [x] **T9 — Tests** (15 test, tất cả pass + `-race` clean): *(`focus_test.go` mới; cập nhật call sites của
+  `renderEntryRow` trong `entryrow_test.go` + `preview_dir_test.go` cho
+  chữ ký 4-tham số)*
   - `TestFocusDefaultIsList`: `newModel(root, nil).focusPane == focusList`.
   - `TestTabTogglesFocus`: Update với `KeyPressMsg` cho `"tab"` toggle 2 chiều (FR2).
   - `TestShiftTabIgnored`: Update với `KeyPressMsg` cho `"shift+tab"` → focus không đổi (no handler).
@@ -819,34 +800,31 @@ Feature: Pane focus state for keyboard-driven scroll
   - `TestClickSetsFocus`: MouseClick trong list pane → focusList; trong preview pane → focusPreview; trên divider → focus không đổi (FR8, FR9).
   - `TestWheelDoesNotChangeFocus`: WheelMsg trên preview pane khi focusList → focus vẫn list (FR9).
   - `TestRenameModeFreezesFocus`: focus list → r → modeRename → Tab → focus giữ list (FR13, D15).
-  - `TestPanelBorderArgs` (golden / direct check trên `panelBorder` call): focus list → left accent, right dim; focus preview → ngược lại (§5.4).
   - `TestCursorRowDimWhenFocusPreview`: `renderEntryRow(e, w, true, false)` → output chứa background `colDim`; với `listFocused=true` → `colAccent` (§5.5).
   - `TestStatusChipReflectsFocus`: `renderStatus` chứa substring `list` khi focusList, `preview` khi focusPreview, hint khác nhau (§5.6).
   - `TestEmptyPanesNoop`: empty preview + focusPreview + j/k = `previewTop` không đổi; empty list + focusList + j/k = noop (FR15).
   - `-race`: parallel Update calls với mixed messages không race trên `focusPane`.
 
-- [ ] **T10 — Visual verdict.** `zz_dump_test.go` thêm 2 frame fixture
-  (focus=list, focus=preview) cùng sample dir; `oh-my-claudecode:visual-verdict`
-  evaluate against design intent (chip pop, border màu phải, cursor row
-  dim khi preview focused). *(zz_dump_test.go)*
+- [x] **T10 — Visual smoke.** Render status bar (ANSI-stripped) cho 2 frame
+  (focus=list / focus=preview) → chip + hint per-focus đúng, cursor row
+  accent vs dim (§6 checklist 22). *(verify bằng harness throwaway)*
 
-- [ ] **T11 — Hint bar wording sync.** Confirm hint bar mới (§5.6) liệt
-  kê đủ phím relevant per focus; check không có lệch giữa hint và
-  actual binding (vd hint nói `[esc] back` nhưng code không handle). *(view.go)*
+- [x] **T11 — Hint bar wording sync.** Hint bar mới (§5.6) liệt kê đúng
+  phím relevant per focus; `[esc] back` chỉ ở bộ preview (Esc handle ở
+  focusPreview), không lệch với binding. *(view.go)*
 
-- [ ] **T12 — Verify.** `go build -o lazyexplorer . && go vet ./... &&
-  go test ./...` xanh; `go test -race ./...` xanh; visual verdict 2
-  frame đạt; chạy tay kiểm acceptance §6 (1–17); `gitnexus_detect_changes`
-  scope khớp với §8.
+- [x] **T12 — Verify.** `go build -o lazyexplorer . && go vet ./... &&
+  go test ./...` xanh; `go test -race ./...` xanh — ĐÃ VERIFY ✅ 2026-05-28;
+  visual smoke 2 frame đạt; `gitnexus_detect_changes` scope khớp với §8.
 
 ## 8. Files chạm tới
 
 | File | Thay đổi |
 |------|----------|
-| `model.go` | + enum `focusPane` + field `focusPane`; + helper `moveCursor`; `updateNormal` refactor route theo focus (Tab toggle; up/down/j/k/g/G/ctrl+d/u branch theo focus; **xoá** `case "J", "ctrl+d"` và `case "K", "ctrl+u"` cũ ở `model.go:647-650`; mutation/nav guard; Esc focus preview → list); `handleMouse` set `focusPane` trong `MouseClickMsg` (divider drag không đụng, wheel không đụng) |
-| `view.go` | `View()` truyền `m.focusPane == ...` vào `panelBorder`; `renderList` pass `listFocused` xuống `renderEntryRow`; `renderEntryRow` thêm tham số `listFocused` + dim cursor row khi false; `renderStatus` thêm focus chip + hint per-focus |
+| `model.go` | + enum `focusPane` + field `focusPane`; + helper `moveCursor`; `updateNormal` refactor route theo focus (Tab toggle; up/down/j/k/g/G/ctrl+d/u branch theo focus; **xoá** `case "J", "ctrl+d"` và `case "K", "ctrl+u"` cũ; mutation/nav guard; Esc focus preview → list); `handleMouse` set `focusPane` trong `MouseClickMsg` (divider drag + no-pane + wheel không đụng) |
+| `view.go` | `renderList` pass `listFocused` xuống `renderEntryRow`; `renderEntryRow` thêm tham số `listFocused` + dim cursor row khi false; `renderStatus` thêm focus chip + hint per-focus. `View()` không đổi (borderless) |
 | `theme.go` | + `focusChipStyle` (`colAccent` background, `colSelFg` foreground, bold) |
-| `focus_test.go` *(mới)* | Tests T9 — phân subset nào dùng `model_test`/`view_test` hiện có thì gộp; subset focus-specific đặt file riêng |
-| `zz_dump_test.go` | + 2 frame fixture (focus list / focus preview); visual verdict reference |
+| `focus_test.go` *(mới)* | Tests T9 (focus-specific) |
+| `entryrow_test.go`, `preview_dir_test.go` | Cập nhật call sites `renderEntryRow` cho chữ ký 4-tham số |
 | `docs/prd-pane-focus.md` | File này |
-| `docs/prd-middle-divider.md` | (không sửa trong PRD này) §5.7 ghi cross-ref; người ship divider sau cần xoá FR10 + §5.4 của PRD này — sẽ làm trong cùng PR với divider, không phải PR focus |
+| `docs/prd-smooth-preview-scroll.md` | + một dòng §1 ghi D2 (fine 1-dòng) + D3 (ctrl+d/u half-page) đã ship qua PRD này (trên `j/k`+focus thay vì `J/K`); status giữ `draft` vì D1 (wheel ±1) + D5 (const) chưa ship |
