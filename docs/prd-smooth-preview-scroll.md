@@ -5,7 +5,14 @@
 > bước nhảy này lớn so với chiều cao panel preview, làm mắt phải bắt lại vị trí sau
 > mỗi lần scroll → khó chịu, đặc biệt khi đang đọc code hoặc markdown từng dòng.
 
-Status: **draft / chờ review** · Author: bug-filing session · Ngày: 2026-05-27
+Status: **accepted (wheel surface)** · Author: bug-filing session · Ngày: 2026-05-27 · Shipped: 2026-05-28
+
+> **Split-ship note:** D1 (wheel ±1 per notch) shipped 2026-05-28 — `previewLineStep`
+> const + wheel callers in `model.go`, tests in `scroll_test.go`. D2 (J/K → ±1) and
+> D3 (ctrl+d/u → half-page) ship together with [[prd-pane-focus]]: that PRD's D13
+> deletes the J/K legacy keys and D11 routes ctrl+d/u as half-page in the focused
+> pane — the same end-state, reached through the focus-aware key router rather
+> than a standalone caller tweak. This PRD is fully closed once pane-focus lands.
 
 ---
 

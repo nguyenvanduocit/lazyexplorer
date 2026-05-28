@@ -382,8 +382,8 @@ func TestWheelInVerticalRoutesByY(t *testing.T) {
 		{"wheel down in list region", 3, tea.MouseWheelDown, 6, 0}, // cursor 5 → 6
 		{"wheel on glyph row noop", 8, tea.MouseWheelUp, 5, 0},
 		{"wheel on glyph row down noop", 8, tea.MouseWheelDown, 5, 0},
-		{"wheel up in preview region", 15, tea.MouseWheelUp, 5, 0}, // already at top, scroll noops
-		{"wheel down in preview region", 15, tea.MouseWheelDown, 5, 3},
+		{"wheel up in preview region", 15, tea.MouseWheelUp, 5, 0},     // already at top, scroll noops
+		{"wheel down in preview region", 15, tea.MouseWheelDown, 5, 1}, // one notch = previewLineStep (1), smooth scroll
 	}
 	for _, c := range cases {
 		m := modelAt(t, root, 70, 24)
@@ -393,7 +393,8 @@ func TestWheelInVerticalRoutesByY(t *testing.T) {
 		// preview is short, but a folder with 20 entries gives us length 20.
 		// Setup: cursor=5 points at a file → previewLen = len(m.preview);
 		// for the scroll-down test we want a previewLen big enough. Force
-		// preview lines to 50 so scrollPreview(3) doesn't clamp to 0.
+		// preview lines to 50 so one wheel notch (previewLineStep) registers
+		// without clamping to 0.
 		fakePreview := make([]string, 50)
 		for i := range fakePreview {
 			fakePreview[i] = "x"

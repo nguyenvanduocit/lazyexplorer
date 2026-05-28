@@ -14,6 +14,14 @@ import (
 // tick is one os.ReadDir gated by dirSig (see syncFromDisk).
 const pollInterval = time.Second
 
+// previewLineStep is how many lines the preview pane moves per wheel notch.
+// One line per notch reads as "smooth" — the mapping is 1-1 with the input
+// the OS already aggregates, so multiplying it is gratuitous extra travel.
+// Half-page jumps for ctrl+d/u are computed per call from bodyH (see
+// prd-smooth-preview-scroll §5.1, D1); fine-step J/K is folded into the
+// focus-aware route in prd-pane-focus.
+const previewLineStep = 1
+
 // tickMsg drives the poll loop. tickCmd schedules the next one; Init kicks off
 // the first and every tickMsg reschedules, so the loop self-sustains.
 type tickMsg struct{}
@@ -582,7 +590,7 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 					m.refreshPreview()
 				}
 			} else {
-				m.scrollPreview(-3)
+				m.scrollPreview(-previewLineStep)
 			}
 		case tea.MouseWheelDown:
 			if overList {
@@ -591,7 +599,7 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 					m.refreshPreview()
 				}
 			} else {
-				m.scrollPreview(3)
+				m.scrollPreview(previewLineStep)
 			}
 		}
 		return m, nil
