@@ -769,7 +769,7 @@ func (m model) renderPreviewRegion(w, h int) string {
 	case modeCommandPalette:
 		return m.renderPalette(w, h)
 	case modeHelp:
-		return m.renderHelp(w, h)
+		return m.renderHelpBody(w, h)
 	default:
 		return m.renderPreview(w)
 	}
@@ -806,10 +806,10 @@ func (m model) renderPalette(w, h int) string {
 	return strings.Join(lines, "\n")
 }
 
-// renderHelp draws the full-help overlay: bindings grouped under titles, scrolled
-// by helpTop. The group order matches fullHelp; helpLineCount counts the same
-// lines so the scroll clamp never overshoots.
-func (m model) renderHelp(w, h int) string {
+// renderHelpBody draws the full-help body for the modal: bindings grouped under
+// titles, scrolled by helpTop. The group order matches fullHelp; helpLineCount
+// counts the same lines so the scroll clamp never overshoots.
+func (m model) renderHelpBody(w, h int) string {
 	titles := []string{"Navigation", "Preview", "Mutation", "Modes", "Misc"}
 	var lines []string
 	for gi, group := range m.fullHelp() {

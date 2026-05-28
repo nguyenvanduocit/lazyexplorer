@@ -269,7 +269,7 @@ func TestShortHelpByFocus(t *testing.T) {
 }
 
 // TestFullHelpGroups: fullHelp returns five non-empty groups (Navigation,
-// Preview, Mutation, Modes, Misc) — matching the titles in renderHelp.
+// Preview, Mutation, Modes, Misc) — matching the titles in renderHelpBody.
 func TestFullHelpGroups(t *testing.T) {
 	m := modelAt(t, t.TempDir(), 100, 30)
 	groups := m.fullHelp()
