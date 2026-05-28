@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"charm.land/bubbles/v2/key"
@@ -34,6 +35,20 @@ type tickMsg struct{}
 
 func tickCmd() tea.Cmd {
 	return tea.Tick(pollInterval, func(time.Time) tea.Msg { return tickMsg{} })
+}
+
+// gitRefreshedMsg carries an async git status snapshot back to Update, tagged
+// with the gen that dispatched it so a stale result (a slower refresh that lands
+// after a newer one) is dropped — the same gen-counter discipline as
+// previewRenderedMsg. collectGitState runs off the Update goroutine because a
+// `git status` on a large repo is too slow to block a keystroke or the poll loop.
+type gitRefreshedMsg struct {
+	gen   uint64
+	state gitState
+}
+
+func gitRefreshCmd(repoRoot string, gen uint64) tea.Cmd {
+	return func() tea.Msg { return gitRefreshedMsg{gen: gen, state: collectGitState(repoRoot)} }
 }
 
 // spinnerInterval is how fast the footer render spinner advances. ~100ms reads as
@@ -136,6 +151,7 @@ type model struct {
 	// the empty-folder placeholder signal.
 	previewEntries []entry
 	previewIsDir   bool
+	previewDirPath string // abs path of the folder being previewed; "" unless previewIsDir. The base dir the git indicator resolves preview rows against (prd-git-change-indicator §5.3).
 
 	// Horizontal scroll + wrap (plain text + code only — prd-horizontal-scroll-preview).
 	// previewScrollable is true when the preview can pan horizontally (plain/code);
@@ -178,6 +194,25 @@ type model struct {
 	// spawns a second loop. Both reset when the render completes.
 	spinnerFrame int
 	spinning     bool
+
+	// Git change state (prd-git-change-indicator). git holds the latest snapshot
+	// the view reads each frame; git.repoRoot=="" ⇒ not a repo (git mode OFF).
+	// Refresh is async (gitRefreshCmd) on the poll tick, INDEPENDENT of dirSig —
+	// `git add`/`commit`/`checkout` change git state without touching file mtime/
+	// size, so the dirSig gate would miss them. gitGen tags each dispatch so a
+	// stale result is dropped (same discipline as renderGen); gitInFlight guards
+	// against stacking a second refresh while one is running (like `spinning`).
+	git         gitState
+	gitGen      uint64
+	gitInFlight bool
+	// gitRootPrefix is the jail root's path RELATIVE TO the repo root (slash-form;
+	// "" when they coincide). It bridges two path spaces: the app's root/cwd are
+	// the launch paths as given (may contain symlink components — macOS /tmp, /var),
+	// while `git rev-parse --show-toplevel` returns a symlink-RESOLVED path. Mapping
+	// an entry to its git key via rel(repoRoot, cwd/name) would then break (a "../"
+	// escape). Instead we resolve the jail root ONCE here and key entries off
+	// rel(m.root, …), which stays in the app's space — see indicatorFor.
+	gitRootPrefix string
 
 	mode      mode
 	focusPane focusPane // sub-state of modeNormal; orthogonal to mode prompts (D1)
@@ -253,8 +288,71 @@ func newModel(root string, tel Recorder) model {
 		tel = noopRecorder{}
 	}
 	m := model{root: root, cwd: root, leftRatio: 0.38, topRatio: 0.33, keymap: defaultKeyMap(), tel: tel}
+	// Detect the repo once — the jail root is fixed, so the repo root can't change
+	// for the session. Inside a repo, prime the first async git refresh: Init
+	// dispatches it, and marking it in-flight here stops the first poll tick from
+	// stacking a second refresh before this one lands.
+	m.git.repoRoot = detectRepoRoot(root)
+	if m.git.repoRoot != "" {
+		m.gitRootPrefix = repoRelPrefix(m.git.repoRoot, root)
+		m.gitGen = 1
+		m.gitInFlight = true
+	}
 	m.reload()
 	return m
+}
+
+// repoRelPrefix returns the jail root's path relative to repoRoot, in slash form
+// ("" when they coincide). The jail root is resolved through EvalSymlinks first so
+// it lands in the same (symlink-resolved) space as git's repoRoot; on a "../"
+// escape (the resolve failed and the paths genuinely diverge) it returns "" so
+// keys still resolve against the repo root rather than producing garbage.
+func repoRelPrefix(repoRoot, root string) string {
+	resolved, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		resolved = root
+	}
+	rel, err := filepath.Rel(repoRoot, resolved)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return ""
+	}
+	if rel == "." {
+		return ""
+	}
+	return filepath.ToSlash(rel)
+}
+
+// indicatorFor resolves the git change indicator for entry e shown under baseDir
+// (the list pane passes m.cwd, the folder preview passes m.previewDirPath). It
+// returns nil when there is nothing to draw: git mode off, the synthetic "..",
+// an unchanged path, or a path that resolves outside the repo. The map lookups
+// are safe on a nil map (git mode primed but first refresh not yet landed).
+func (m model) indicatorFor(baseDir string, e entry) *rowIndicator {
+	if m.git.repoRoot == "" || e.name == ".." {
+		return nil
+	}
+	// Resolve the entry's key in the app's path space (rel to the jail root, which
+	// is symlink-clean), then prepend gitRootPrefix to reach the repo-relative key
+	// git uses. Doing it via m.root — not m.git.repoRoot — avoids the symlink
+	// mismatch between the launch path and git's resolved toplevel.
+	within, err := filepath.Rel(m.root, filepath.Join(baseDir, e.name))
+	if err != nil {
+		return nil
+	}
+	rel := filepath.ToSlash(filepath.Join(m.gitRootPrefix, within))
+	if rel == ".." || strings.HasPrefix(rel, "../") {
+		return nil // entry sits outside the repo (defensive)
+	}
+	if e.isDir {
+		if m.git.dirtyDirs[rel] {
+			return &rowIndicator{badge: rollupGlyph, color: colDim}
+		}
+		return nil
+	}
+	if chg, ok := m.git.changes[rel]; ok {
+		return &rowIndicator{badge: chg.code.badge(), color: gitColor(chg.code), delta: chg.deltaString()}
+	}
+	return nil
 }
 
 // reload re-reads m.cwd into entries and refreshes the preview for the cursor.
@@ -431,6 +529,7 @@ func (m *model) refreshPreview() {
 	// confuse previewClick + renderPreview's mode switch.
 	m.previewEntries = nil
 	m.previewIsDir = false
+	m.previewDirPath = "" // only the dir branch below sets it (git indicator base for preview rows)
 
 	if len(m.entries) == 0 {
 		m.preview = []string{dimStyle.Render("(empty directory)")}
@@ -459,6 +558,7 @@ func (m *model) refreshPreview() {
 		}
 		m.previewEntries = entries
 		m.previewIsDir = true
+		m.previewDirPath = full // base dir the git indicator resolves preview rows against
 		return
 	}
 
@@ -759,7 +859,14 @@ func (m *model) applyPreview(msg previewRenderedMsg) {
 	})
 }
 
-func (m model) Init() tea.Cmd { return tickCmd() }
+func (m model) Init() tea.Cmd {
+	// Inside a repo, kick off the first git refresh alongside the poll loop.
+	// newModel already primed gitGen/gitInFlight; tea.Batch keeps tickCmd running.
+	if m.git.repoRoot != "" {
+		return tea.Batch(tickCmd(), gitRefreshCmd(m.git.repoRoot, m.gitGen))
+	}
+	return tickCmd()
+}
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
@@ -773,6 +880,25 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.syncFromDisk()
 		}
 		cmd = tickCmd()
+		// Refresh git state on the same cadence but INDEPENDENT of the dirSig gate
+		// (D9): a stage/commit/checkout changes git state without a file mtime/size
+		// change, so syncFromDisk's gate would miss it. The in-flight guard stops a
+		// slow refresh from stacking; gen++ tags this dispatch so a stale result is
+		// dropped on arrival.
+		if m.git.repoRoot != "" && !m.gitInFlight {
+			m.gitInFlight = true
+			m.gitGen++
+			cmd = tea.Batch(tickCmd(), gitRefreshCmd(m.git.repoRoot, m.gitGen))
+		}
+	case gitRefreshedMsg:
+		// Async git snapshot landed. Clear the in-flight guard so the next tick can
+		// dispatch again, and apply only if this is still the latest dispatch (a
+		// stale result from an earlier, slower refresh is dropped). The next frame
+		// (driven by the 1s poll tick) reflects the new map — no dirSig touch needed.
+		m.gitInFlight = false
+		if msg.gen == m.gitGen {
+			m.git = msg.state
+		}
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		// Width is now known (or changed) — the tail syncPreview renders the

@@ -43,12 +43,12 @@ có cursor riêng (vi phạm "two panels là trần" trong `CLAUDE.md`). KHÔNG 
 |---|-----------|---------|-------|
 | D1 | Deliverable | **PRD + design + task** một file | house style của repo |
 | D2 | Routine chung | một `renderEntryRow(e, w, active)` ở `view.go`, dùng cho **cả** list pane lẫn folder preview | Rule 3: một nguồn render → không drift, đổi format một chỗ áp cả hai |
-| D3 | File size | hiện ở **cả hai** pane — list pane **thêm** cột size (hiện chưa có) | user chọn; cùng routine thì cùng thông tin |
+| D3 | Cột phải | **git change indicator** ở **cả hai** pane, qua cùng routine (chi tiết: `prd-git-change-indicator`) | app phục vụ agent — "đổi gì" hữu ích hơn "nặng bao nhiêu byte"; cùng routine thì cùng thông tin |
 | D4 | Phân biệt dir/file | **style + trailing `/`**, KHÔNG emoji ở cả hai pane | khớp list pane hiện tại; emoji là chrome thừa, ngược tối giản lazygit-style |
 | D5 | Đánh dấu hàng chọn | full-width `cursorActiveStyle` accent highlight **chỉ** ở list pane; preview không marker | preview không có cursor riêng (Non-goal); highlight phủ toàn hàng là affordance đủ rõ, không cần thêm glyph marker |
 | D6 | Tương tác preview | **giữ** click-to-navigate (`previewClick`, `model.go:381-423`) | tính năng đang có, read-only + click nhẹ; bỏ đi là regression |
 | D7 | Nguồn dữ liệu folder preview | lưu `m.previewEntries []entry`, **render at view-time**, KHÔNG thêm cache machinery kiểu markdown | folder row chỉ style + `fitWidth` (không wrap/parse) → rẻ; cache-by-width của markdown giải bài toán glamour-wrap mà folder không có |
-| D8 | Styling cột size (file, inactive) | tô `dimStyle` (muted), **không** `fileStyle` | glance UI — mắt cần landing trên `name` trước; bytes là supporting metadata, không phải headline. Hàng active **giữ** style cũ (cursor accent đè toàn fg, dim trên accent unreadable) |
+| D8 | Styling cột phải (file, inactive) | git badge tô màu theo loại + delta diffstat (xanh/đỏ); `name` tô `fileStyle` | glance UI — mắt landing trên `name` trước, indicator là supporting metadata. Hàng active **giữ** style cũ (cursor accent đè toàn fg, badge màu trên accent unreadable → render plain) |
 
 ## 4. Functional requirements
 
@@ -58,23 +58,25 @@ có cursor riêng (vi phạm "two panels là trần" trong `CLAUDE.md`). KHÔNG 
 - **FR2** — Dir hiển thị `name + "/"` tô `dirStyle`; file hiển thị `name` tô `fileStyle`;
   **không** emoji ở cả hai pane (D4). `..` tổng hợp ở list pane vẫn là dir, không thêm `/`
   (giữ hành vi `renderList` hiện tại, `view.go:158`).
-- **FR3** — Size người-đọc-được (`humanSize`, `fs.go:214`) hiển thị cho **file** ở **cả
-  hai** pane; dir không hiện size (D3).
+- **FR3** — Git change indicator (badge loại thay đổi + line delta cho file; dấu ● roll-up
+  cho folder chứa thay đổi) hiển thị ở **cả hai** pane qua cùng routine; chi tiết hành vi ở
+  `prd-git-change-indicator` (D3). Ngoài git repo → cột phải trống.
 - **FR4** — Hàng đang chọn ở list pane mang full-width `cursorActiveStyle` accent
   highlight; folder preview **không** vẽ marker nào (D5).
 - **FR5** — Folder preview vẫn click-to-navigate: click một hàng trong preview → vào folder
   + đặt cursor lên item đó, đúng end-state như descend từ list pane (`previewClick` giữ, D6).
 - **FR6** — Truncation nhất quán: khi `name` rộng hơn chỗ trống, cắt + `…` giống nhau hai
-  pane (qua `fitWidth`, `view.go:251`); khi width quá hẹp, **bỏ size trước**, rồi mới cắt
-  `name` (name quan trọng hơn size).
+  pane (qua `fitWidth`); khi width quá hẹp, **bỏ indicator trước** (delta trước badge), rồi
+  mới cắt `name` (name quan trọng hơn — `prd-git-change-indicator` D8).
 - **FR7** — Folder rỗng hiện **cùng** placeholder ở hai pane. Thứ tự liệt kê dirs-first,
   case-insensitive theo name — đã shared qua `readDir` (`fs.go:42-47`), không đổi.
 - **FR8** — Khi poll loop phát hiện folder đang preview thay đổi (`syncFromDisk` →
   `refreshPreview`), `m.previewEntries` được cập nhật và preview vẽ lại nội dung mới.
-- **FR9** — Cột size của một **file inactive** (cả hai pane) tô `dimStyle` (muted),
-  còn `name` tô `fileStyle` (D8). Gap giữa hai cột để trống — panel background hiện
-  xuyên qua. Hàng **active** ở list pane vẫn dùng `cursorActiveStyle` phủ toàn hàng;
-  mute không áp ở đây để size còn đọc được trên nền accent.
+- **FR9** — Cột phải của một **file inactive** (cả hai pane): git badge tô màu theo loại
+  thay đổi, delta là diffstat xanh/đỏ; `name` tô `fileStyle` (D8). Gap giữa hai cột để
+  trống — panel background hiện xuyên qua. Hàng **active** ở list pane vẫn dùng
+  `cursorActiveStyle` phủ toàn hàng; indicator render **plain** ở đây để đọc được trên
+  nền accent (`prd-git-change-indicator` D11).
 
 ## 5. Technical design
 
@@ -91,38 +93,32 @@ Nguồn sự thật duy nhất cho format một hàng listing. List pane và fol
 ```go
 // renderEntryRow vẽ một hàng entry ở bề rộng w cột, giống hệt nhau ở mọi pane.
 // active = true chỉ ở hàng cursor của list pane (full-width accent highlight là
-// duy nhất marker); preview luôn false.
-// Format: name(+"/" nếu dir) tô style + size phải-căn cho file. Hàng vẽ flush-left
-// ở cột 0 của pane — không có glyph slot.
-// Inactive file: name tô fileStyle, size tô dimStyle (muted, D8/FR9).
-func renderEntryRow(e entry, w int, active bool) string {
+// duy nhất marker); preview luôn false. ind = git indicator đã-resolve của hàng
+// (nil ⇒ không có) — caller (renderList / renderPreview) tra theo base-dir của nó.
+// Format: name(+"/" nếu dir) tô style + indicator phải-căn. Hàng vẽ flush-left.
+func renderEntryRow(e entry, ind *rowIndicator, w int, active, listFocused bool) string {
     name := e.name
     if e.isDir && e.name != ".." {
         name += "/"
     }
-    // size chỉ cho file; bỏ trước khi cắt name khi hẹp (FR6)
-    size := ""
-    if !e.isDir {
-        size = humanSize(e.size)
-    }
     if active {
-        return cursorActiveStyle.Width(w).Render(fitRow(name, size, w))
+        plain, _ := chooseIndicator(ind, lipgloss.Width(name), w)
+        return cursorActiveStyle.Width(w).Render(fitRow(name, plain, w)) // listFocused tunes bg
     }
     if e.isDir {
-        return dirStyle.Render(fitRow(name, "", w))
+        return styleRow(name, dirStyle, ind, w)
     }
-    // Inactive file: name + size styled riêng để mute cột size.
-    return styleFileRow(name, size, w)
+    return styleRow(name, fileStyle, ind, w)
 }
 ```
 
-`fitRow(name, size, w)` (helper nhỏ ở `view.go`): nếu `name + gap + size` vừa `w` → name
-trái, size căn phải (đệm khoảng giữa); nếu không đủ chỗ → bỏ size, `fitWidth(name, w)`.
-`fitRow` trả plain string — phục vụ hàng active (một style phủ cả) và hàng dir (không có
-size). `styleFileRow(name, size, w)` (cùng `view.go`) là biến thể cho **inactive file**:
-cùng layout của `fitRow` nhưng tô `fileStyle` cho `name`, `dimStyle` cho `size`, gap để
-trống — D8/FR9. Khi `active`, style nền phủ cả size nên size nằm trong vùng highlight
-(mute không áp — sẽ unreadable trên nền accent).
+`fitRow(name, right, w)` (helper ở `view.go`): name trái, `right` căn phải; không đủ chỗ →
+bỏ `right`, `fitWidth(name, w)`. Trả plain string — phục vụ hàng active (một style phủ cả).
+`styleRow(name, nameStyle, ind, w)` lo hàng inactive (dir ● lẫn file badge+delta): name tô
+`nameStyle`, indicator tô màu riêng, gap để trống — qua `chooseIndicator` chọn candidate
+rộng nhất vừa cột (name > badge > delta, D8). Chi tiết indicator (badge/màu/delta, async
+collect, folder roll-up) ở **`prd-git-change-indicator`**; ở đây chỉ cần biết cả hai pane đi
+qua đúng routine này nên indicator của cùng một entry + base-dir là byte-identical (FR1).
 
 > **Lưu ý styling khi active:** `cursorActiveStyle.Width(w).Render(...)` phủ nền accent
 > toàn hàng (giống `view.go:166` hiện tại). Vì `renderEntryRow` tự bọc style, **không**
@@ -133,8 +129,8 @@ trống — D8/FR9. Khi `active`, style nền phủ cả size nên size nằm tr
 
 `renderList` (`view.go:147-179`) thay vòng tự-format bằng việc gọi `renderEntryRow` mỗi
 hàng visible, `active = (i == m.cursor)`. Logic scroll (`listTopFor`) giữ nguyên; chỉ
-phần dựng chuỗi hàng được thay bằng routine chung. List pane nhờ đó **thêm cột size**
-(D3/FR3) tự động, và hàng cursor mang highlight phủ toàn pane width.
+phần dựng chuỗi hàng được thay bằng routine chung. List pane nhờ đó mang **git indicator ở
+cột phải** (D3/FR3) tự động, và hàng cursor mang highlight phủ toàn pane width.
 
 ### 5.3 Folder preview lưu entries, render at view-time (`model.go` + `fs.go`)
 
@@ -246,7 +242,7 @@ Feature: Consistent file listing across the list pane and the folder preview
     And I view the file "main.go" in the folder preview
     Then in both panes it appears as the name "main.go" with no trailing slash
     And in both panes it carries the file style
-    And in both panes its human-readable size is shown
+    And in both panes it carries the same git change indicator
 
   Scenario: The active row is marked only in the list pane
     Given the cursor is on "main.go" in the list pane
@@ -281,15 +277,15 @@ Feature: Consistent file listing across the list pane and the folder preview
 
 ### Checklist verify
 
-1. Đặt cursor lên một folder → preview liệt kê nội dung **không** emoji, dir có `/`, file
-   có size, màu dir/file khớp y list pane bên trái.
+1. Đặt cursor lên một folder → preview liệt kê nội dung **không** emoji, dir có `/`, git
+   indicator + màu dir/file khớp y list pane bên trái.
 2. So sánh trực tiếp: cũng folder đó, một hàng dir và một hàng file trông byte-giống nhau ở
    hai pane, chỉ list pane mới có hàng cursor được phủ `cursorActiveStyle` accent highlight.
-3. List pane (regression có chủ đích): file giờ hiện size; name dài + size vẫn không tràn
-   panel, không vỡ frame.
+3. List pane: cột phải là git indicator (không phải size); name dài + indicator vẫn không
+   tràn panel, không vỡ frame.
 4. Folder rỗng → cùng placeholder hai pane.
 5. Click một hàng trong folder preview → vào folder + cursor đúng item (FR5 không regress).
-6. Width hẹp (kéo divider nhỏ): size bị bỏ trước, name cắt `…`, hai pane cắt giống nhau.
+6. Width hẹp (kéo divider nhỏ): indicator bị bỏ trước, name cắt `…`, hai pane cắt giống nhau.
 7. Poll: agent thêm/xóa file trong folder đang preview → preview cập nhật trong ~1s.
 8. `go build -o lazyexplorer . && go vet ./... && go test ./...` xanh.
 

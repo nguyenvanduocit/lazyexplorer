@@ -5,7 +5,7 @@
 > kèm line delta (`+41 -3`) cho "đổi bao nhiêu", và một dấu ● mờ roll-up cho folder có thay
 > đổi bên trong. Mục tiêu: liếc một cái biết "agent vừa động vào file/folder nào, đổi cỡ nào".
 
-Status: **draft / chờ review** · Author: phiên brainstorm git-indicator · Ngày: 2026-05-29
+Status: **accepted** · Author: phiên brainstorm git-indicator · Ngày: 2026-05-29 · Shipped: 2026-05-29
 
 ---
 
@@ -476,38 +476,38 @@ Feature: Git change indicator in the file listing
 > Đề xuất, chờ duyệt trước khi tick. TDD: test đỏ trước, code tới xanh (`CLAUDE.md` §Testing).
 > Map sát file. Mở rộng hot-path test mọi tầng (fs/git parse, model async, view render).
 
-- [ ] **T1 — Parser thuần (`git.go` + test đỏ trước).** `gitChange`/`gitCode`/`gitState`;
+- [x] **T1 — Parser thuần (`git.go` + test đỏ trước).** `gitChange`/`gitCode`/`gitState`;
   parse porcelain `-z -uall` (rename 2-field gotcha), collapse XY→code **mọi combo**
   (`MM`/`AD`/`RM`/`AA`/`DD`/`UU` — checklist §6.10), parse numstat `-z` (binary `-`, rename
   format), build `dirtyDirs`. §5.1. *(git.go, git_test.go)*
-- [ ] **T2 — Collect async (`git.go`).** `collectGitState(repoRoot)`: detect repoRoot qua
+- [x] **T2 — Collect async (`git.go`).** `collectGitState(repoRoot)`: detect repoRoot qua
   `rev-parse --show-toplevel`; `status --porcelain=v1 -z -uall`; numstat **HEAD-aware**
   (`rev-parse --verify -q HEAD` → `diff HEAD` | `diff --cached`); đếm dòng untracked cap
   `maxUntrackedScan`; mỗi exec qua `exec.CommandContext` timeout ~2s; **per-command
   independence** (numstat fail ≠ xoá badge); resilient mọi lỗi → degrade (FR10). §5.1.
   *(git.go, git_test.go)*
-- [ ] **T3 — Model wiring async.** Field `git`/`gitGen`/`gitInFlight`; `gitRefreshedMsg` +
+- [x] **T3 — Model wiring async.** Field `git`/`gitGen`/`gitInFlight`; `gitRefreshedMsg` +
   `gitRefreshCmd`; detect repoRoot ở `Init`; dispatch qua **`tea.Batch`** ở `Init` + `tickMsg`
   (giữ `tickCmd()`, độc lập `dirSig`, in-flight guard); apply gen-gated. §5.2.
   *(model.go, model_git_test.go)*
-- [ ] **T4 — `previewDirPath`.** Lưu đường dẫn folder đang preview cùng `previewEntries`/
+- [x] **T4 — `previewDirPath`.** Lưu đường dẫn folder đang preview cùng `previewEntries`/
   `previewIsDir`; reset hygiene; để `renderPreview` resolve indicator theo nó. §5.3. *(model.go)*
-- [ ] **T5 — Indicator builder + `renderEntryRow` signature.** `rowIndicator`; resolve repo-rel
+- [x] **T5 — Indicator builder + `renderEntryRow` signature.** `rowIndicator`; resolve repo-rel
   + tra `changes`/`dirtyDirs`; priority chain name>badge>delta; active-row plain (D11). Gỡ
   `humanSize` khỏi row. §5.3. *(view.go, entryrow_test.go)*
-- [ ] **T6 — Layout helpers.** `fitRow` đổi `size`→`right` (ngữ nghĩa giữ); `styleFileRow`→
+- [x] **T6 — Layout helpers.** `fitRow` đổi `size`→`right` (ngữ nghĩa giữ); `styleFileRow`→
   split-style cột phải nhiều mảnh; helper `styleRow` chung dir-●/file-badge. §5.3.
   *(view.go, entryrow_test.go)*
-- [ ] **T7 — Caller render.** `renderList` resolve theo `m.cwd`; `renderPreview` folder branch
+- [x] **T7 — Caller render.** `renderList` resolve theo `m.cwd`; `renderPreview` folder branch
   theo `m.previewDirPath`; FR5 cross-pane byte-identical. §5.4. *(view.go)*
-- [ ] **T8 — Palette.** `colGitNew` + map `gitCode→color`; delta/● dùng `dimStyle`. §5.5.
+- [x] **T8 — Palette.** `colGitNew` + map `gitCode→color`; delta/● dùng `dimStyle`. §5.5.
   *(theme.go)*
-- [ ] **T9 — Rewrite tests size→indicator.** `entryrow_test.go` (size assertions → badge/delta/
+- [x] **T9 — Rewrite tests size→indicator.** `entryrow_test.go` (size assertions → badge/delta/
   priority/active-plain/cross-pane); thêm git-mode-off case; giữ binary-preview-size regression.
   §6. *(entryrow_test.go, preview_dir_test.go)*
-- [ ] **T10 — Reconcile doc.** Cập nhật `prd-consistent-file-listing.md` (D3/FR3/D8/FR9/§5.1/
+- [x] **T10 — Reconcile doc.** Cập nhật `prd-consistent-file-listing.md` (D3/FR3/D8/FR9/§5.1/
   Gherkin/checklist) size→indicator, positive framing (§5.6). *(docs/prd-consistent-file-listing.md)*
-- [ ] **T11 — Verify.** `go build -o lazyexplorer . && go vet ./... && go test ./... -race` xanh;
+- [x] **T11 — Verify.** `go build -o lazyexplorer . && go vet ./... && go test ./... -race` xanh;
   chạy tay checklist §6; visual verdict trên ảnh render (badge màu/căn/●/cursor).
 
 ## 8. Files chạm tới

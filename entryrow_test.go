@@ -126,7 +126,7 @@ func TestFitRowCJKWidth(t *testing.T) {
 // is styled with dirStyle (we detect by checking colDir in the ANSI). The row
 // starts flush-left at column 0 of the pane.
 func TestRenderEntryRowDirInactive(t *testing.T) {
-	got := renderEntryRow(entry{name: "src", isDir: true}, 20, false, true)
+	got := renderEntryRow(entry{name: "src", isDir: true}, nil, 20, false, true)
 	plain := ansi.Strip(got)
 	if !strings.HasPrefix(plain, "src/") {
 		t.Errorf("inactive dir row must start flush-left with the name; got %q", plain)
@@ -139,7 +139,7 @@ func TestRenderEntryRowDirInactive(t *testing.T) {
 // TestRenderEntryRowParentDotsHasNoSlash: the synthetic ".." dir entry must
 // NOT get a trailing "/" (FR2, matches current renderList behaviour).
 func TestRenderEntryRowParentDotsHasNoSlash(t *testing.T) {
-	got := renderEntryRow(entry{name: "..", isDir: true}, 20, false, true)
+	got := renderEntryRow(entry{name: "..", isDir: true}, nil, 20, false, true)
 	plain := ansi.Strip(got)
 	if strings.Contains(plain, "../") {
 		t.Errorf("\"..\" must NOT carry a trailing slash; got %q", plain)
@@ -149,37 +149,60 @@ func TestRenderEntryRowParentDotsHasNoSlash(t *testing.T) {
 	}
 }
 
-// TestRenderEntryRowFileShowsSize: file inactive row carries the human size,
-// proving the list pane now gets the size column (D3/FR3).
-func TestRenderEntryRowFileShowsSize(t *testing.T) {
-	got := renderEntryRow(entry{name: "main.go", isDir: false, size: 1234}, 30, false, true)
+// TestRenderEntryRowFileNoSizeWhenClean proves the byte size is gone (FR9): a
+// file with no git indicator (clean / git mode off) renders just its name — no
+// "1.2KB"-style number anywhere in the row.
+func TestRenderEntryRowFileNoSizeWhenClean(t *testing.T) {
+	got := renderEntryRow(entry{name: "main.go", isDir: false, size: 1234}, nil, 30, false, true)
 	plain := ansi.Strip(got)
 	if !strings.Contains(plain, "main.go") {
 		t.Errorf("file name missing; got %q", plain)
 	}
-	want := humanSize(1234)
-	if !strings.Contains(plain, want) {
-		t.Errorf("file row should show human size %q; got %q", want, plain)
+	if strings.Contains(plain, humanSize(1234)) || strings.Contains(plain, "KB") {
+		t.Errorf("the byte size must NOT appear in a listing row (FR9); got %q", plain)
 	}
 }
 
-// TestRenderEntryRowFileSizeMutedInactive pins the styling split for an inactive
-// file row (D8/FR9): the name carries fileStyle (the headline), the size carries
-// dimStyle (supporting metadata). In a glance UI the eye should land on the
-// name first, not on a bright bytes column — so the size column is muted to the
-// same gray as borders/placeholders. Active rows are intentionally exempt: the
-// cursor highlight already paints a single bright foreground over the whole
-// row, and a dim-on-accent size would be unreadable.
-func TestRenderEntryRowFileSizeMutedInactive(t *testing.T) {
-	got := renderEntryRow(entry{name: "main.go", isDir: false, size: 4242}, 30, false, true)
-	size := humanSize(4242)
-	dim := dimColorANSI(t)
-	// dimStyle.Render(size) emits "<dim-SGR>size<reset>". The row therefore
-	// contains the substring "<dim-SGR>size" iff size was wrapped in dimStyle,
-	// not fileStyle (which uses a different foreground color → different SGR).
-	if !strings.Contains(got, dim+size) {
-		t.Errorf("inactive file size %q must be wrapped in dimStyle (SGR %q); got %q",
-			size, dim, got)
+// TestRenderEntryRowFileBadgeAndDelta pins an inactive modified file (FR1/FR2/
+// D12): the badge "M" carries the modified color, "+41" the green add color, and
+// "-3" the red delete color — name stays in fileStyle.
+func TestRenderEntryRowFileBadgeAndDelta(t *testing.T) {
+	ind := &rowIndicator{badge: "M", color: gitColor(gitModified), delta: "+41 -3"}
+	got := renderEntryRow(entry{name: "main.go", isDir: false}, ind, 30, false, true)
+	plain := ansi.Strip(got)
+	for _, want := range []string{"main.go", "M", "+41", "-3"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("row should contain %q; got %q", want, plain)
+		}
+	}
+	// "+41" wrapped in the green add style, "-3" in the red delete style.
+	if !strings.Contains(got, leadingSGR(t, gitAddStyle)+"+41") {
+		t.Errorf("\"+41\" must be wrapped in gitAddStyle (green); got %q", got)
+	}
+	if !strings.Contains(got, leadingSGR(t, gitDelStyle)+"-3") {
+		t.Errorf("\"-3\" must be wrapped in gitDelStyle (red); got %q", got)
+	}
+	// The badge carries the modified (amber) foreground.
+	badgeSGR := leadingSGR(t, lipgloss.NewStyle().Foreground(gitColor(gitModified)))
+	if !strings.Contains(got, badgeSGR+"M") {
+		t.Errorf("badge \"M\" must carry the modified color SGR %q; got %q", badgeSGR, got)
+	}
+}
+
+// TestRenderEntryRowFolderRollup: a folder with changes inside shows the dim ●
+// roll-up marker (FR3/D4) at the right edge, name still in dirStyle.
+func TestRenderEntryRowFolderRollup(t *testing.T) {
+	ind := &rowIndicator{badge: rollupGlyph, color: colDim}
+	got := renderEntryRow(entry{name: "src", isDir: true}, ind, 20, false, true)
+	plain := ansi.Strip(got)
+	if !strings.HasPrefix(plain, "src/") {
+		t.Errorf("dir name should lead the row; got %q", plain)
+	}
+	if !strings.Contains(plain, rollupGlyph) {
+		t.Errorf("a dirty folder should show the roll-up %q; got %q", rollupGlyph, plain)
+	}
+	if !strings.Contains(got, dimColorANSI(t)+rollupGlyph) {
+		t.Errorf("the roll-up marker should be dim; got %q", got)
 	}
 }
 
@@ -189,7 +212,7 @@ func TestRenderEntryRowFileSizeMutedInactive(t *testing.T) {
 // pane width). The full-width accent background IS the cursor marker (no caret
 // glyph). listFocused=true here exercises the focused-list accent path.
 func TestRenderEntryRowActiveFullWidthHighlight(t *testing.T) {
-	got := renderEntryRow(entry{name: "main.go", isDir: false, size: 100}, 30, true, true)
+	got := renderEntryRow(entry{name: "main.go", isDir: false, size: 100}, nil, 30, true, true)
 	plain := ansi.Strip(got)
 	if !strings.HasPrefix(plain, "main.go") {
 		t.Errorf("active row must start flush-left with the name; got %q", plain)
@@ -206,7 +229,7 @@ func TestRenderEntryRowActiveFullWidthHighlight(t *testing.T) {
 // padded to full w — only the active row gets full-width highlight. Width
 // stays ≤ w, which prevents accidental background bleeding through fileStyle.
 func TestRenderEntryRowInactiveDoesNotForcePad(t *testing.T) {
-	got := renderEntryRow(entry{name: "x.go", isDir: false, size: 1}, 30, false, true)
+	got := renderEntryRow(entry{name: "x.go", isDir: false, size: 1}, nil, 30, false, true)
 	if w := lipgloss.Width(got); w > 30 {
 		t.Errorf("inactive row width = %d, must not exceed w=30; got %q", w, got)
 	}
@@ -219,8 +242,8 @@ func TestRenderEntryRowInactiveDoesNotForcePad(t *testing.T) {
 // applied only when active=true. Two inactive calls must match exactly.
 func TestRenderEntryRowConsistencyAcrossPanes(t *testing.T) {
 	e := entry{name: "main.go", isDir: false, size: 4242}
-	a := renderEntryRow(e, 40, false, true)
-	b := renderEntryRow(e, 40, false, true)
+	a := renderEntryRow(e, nil, 40, false, true)
+	b := renderEntryRow(e, nil, 40, false, true)
 	if a != b {
 		t.Errorf("renderEntryRow not deterministic for same input:\n a=%q\n b=%q", a, b)
 	}
@@ -230,23 +253,29 @@ func TestRenderEntryRowConsistencyAcrossPanes(t *testing.T) {
 // renderList integration — list pane now renders through renderEntryRow
 // ----------------------------------------------------------------------------
 
-// TestRenderListShowsFileSize is the behaviour-level proof of D3/FR3: after
-// switching renderList to renderEntryRow, the list pane shows file sizes (it
-// did not before). We use the live View() so this also guards against a
-// regression in row width math.
-func TestRenderListShowsFileSize(t *testing.T) {
+// TestRenderListNoSizeOutsideRepo is the behaviour-level proof of FR8/FR9: a
+// t.TempDir() is not a git repo, so the list pane shows plain names — no byte
+// size (it used to), and no git badge. We use the live View() so this also
+// guards against a regression in row width math.
+func TestRenderListNoSizeOutsideRepo(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, dir, "main.go", strings.Repeat("x", 1234))
 	mustMkdir(t, dir, "src")
 
 	m := modelAt(t, dir, 100, 30)
+	if m.git.repoRoot != "" {
+		t.Skip("temp dir unexpectedly inside a git repo; FR8 path not exercised")
+	}
 	plain := ansi.Strip(m.View().Content)
 
-	// File row carries its human size.
-	if !strings.Contains(plain, humanSize(1234)) {
-		t.Errorf("list pane should show file size %q in View(); got:\n%s", humanSize(1234), plain)
+	// The byte size must be gone entirely (FR9).
+	if strings.Contains(plain, humanSize(1234)) || strings.Contains(plain, "KB") {
+		t.Errorf("listing must not show a byte size; got:\n%s", plain)
 	}
-	// Dir row still ends with "/" (sanity check, not regressed).
+	// Names still render — file and dir (dir keeps its trailing "/").
+	if !strings.Contains(plain, "main.go") {
+		t.Errorf("file name should still show; got:\n%s", plain)
+	}
 	if !strings.Contains(plain, "src/") {
 		t.Errorf("dir row should still show trailing '/'; got:\n%s", plain)
 	}
@@ -292,9 +321,67 @@ func TestRenderListHighlightsCursorRow(t *testing.T) {
 	}
 }
 
+// TestChooseIndicatorPriority pins the name > badge > delta drop order (D8/FR4):
+// at a generous width the full "badge + delta" candidate wins; squeezed, the
+// delta drops and the badge survives; squeezed further, nothing fits.
+func TestChooseIndicatorPriority(t *testing.T) {
+	ind := &rowIndicator{badge: "M", color: gitColor(gitModified), delta: "+41 -3"}
+	const nameW = 8 // pretend the name occupies 8 cols
+
+	// Wide: name(8) + 1 + "M +41 -3"(8) = 17 ≤ 20 → full candidate.
+	if plain, _ := chooseIndicator(ind, nameW, 20); plain != "M +41 -3" {
+		t.Errorf("wide pane should keep badge+delta; got %q", plain)
+	}
+	// Tight: full(8) won't fit (8+1+8=17 > 12) but badge(1) does (8+1+1=10 ≤ 12).
+	if plain, _ := chooseIndicator(ind, nameW, 12); plain != "M" {
+		t.Errorf("tight pane should drop the delta and keep the badge; got %q", plain)
+	}
+	// Narrower than name+badge → nothing fits, caller truncates the name.
+	if plain, _ := chooseIndicator(ind, nameW, 9); plain != "" {
+		t.Errorf("when even the badge can't fit, no indicator; got %q", plain)
+	}
+}
+
+// TestRenderEntryRowActiveIndicatorPlain pins D11/FR6: the cursor row carries the
+// indicator (so the selected file's change is still visible) but renders it PLAIN
+// inside the accent highlight — the green/red delta colors do NOT leak onto the
+// accent background. Row width stays exactly w.
+func TestRenderEntryRowActiveIndicatorPlain(t *testing.T) {
+	ind := &rowIndicator{badge: "M", color: gitColor(gitModified), delta: "+41 -3"}
+	got := renderEntryRow(entry{name: "main.go", isDir: false}, ind, 30, true, true)
+
+	if w := lipgloss.Width(got); w != 30 {
+		t.Errorf("active row width = %d, want 30 (full pane highlight)", w)
+	}
+	if !strings.Contains(got, accentBgANSI(t)) {
+		t.Errorf("active row should carry the accent bg; got %q", got)
+	}
+	if !strings.Contains(ansi.Strip(got), "+41") {
+		t.Errorf("active row should still show the delta text; got %q", ansi.Strip(got))
+	}
+	// The green add color must NOT appear — the indicator is laid out plain on the
+	// accent so it can't wash out (a per-token color over accent is the bug D11 avoids).
+	if strings.Contains(got, leadingSGR(t, gitAddStyle)) {
+		t.Errorf("active row indicator must be plain (no green delta SGR); got %q", got)
+	}
+}
+
 // ----------------------------------------------------------------------------
 // helpers
 // ----------------------------------------------------------------------------
+
+// leadingSGR renders "X" with st and returns the leading SGR escape lipgloss
+// emits before the content — the generic form of dirColorANSI/dimColorANSI, used
+// to assert a substring carries a given style without hand-encoding the color.
+func leadingSGR(t *testing.T, st lipgloss.Style) string {
+	t.Helper()
+	out := st.Render("X")
+	idx := strings.Index(out, "X")
+	if idx <= 0 {
+		t.Fatalf("style.Render produced no leading SGR escape: %q", out)
+	}
+	return out[:idx]
+}
 
 // dirColorANSI returns the ANSI escape lipgloss emits when applying dirStyle,
 // without our having to hand-encode the color. It renders an empty string with

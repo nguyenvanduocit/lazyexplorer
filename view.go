@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"image/color"
 	"strings"
 
 	"charm.land/bubbles/v2/key"
@@ -312,9 +313,16 @@ func (m model) renderList(w, h int) string {
 
 	top := m.listTopFor(h)
 	listFocused := m.focusPane == focusList
+	// Git indicator base: list rows live in cwd, except in search mode where each
+	// entry name is a path relative to the jail root (resolve against root then).
+	base := m.cwd
+	if m.mode == modeSearch {
+		base = m.root
+	}
 	var b strings.Builder
 	for i := top; i < len(m.entries) && i < top+h; i++ {
-		b.WriteString(renderEntryRow(m.entries[i], w, i == m.cursor, listFocused))
+		ind := m.indicatorFor(base, m.entries[i])
+		b.WriteString(renderEntryRow(m.entries[i], ind, w, i == m.cursor, listFocused))
 		if i < len(m.entries)-1 && i < top+h-1 {
 			b.WriteByte('\n')
 		}
@@ -322,114 +330,164 @@ func (m model) renderList(w, h int) string {
 	return b.String()
 }
 
-// renderEntryRow draws ONE listing row at w display columns. It is the single
-// place a row is formatted, so list pane and folder preview (G002) never
-// disagree on row format — see docs/prd-consistent-file-listing.md §5.1.
-// active=true marks the cursor row in the list pane; the full-width accent
-// highlight from cursorActiveStyle IS the cursor marker. The folder preview
-// always passes active=false.
+// rollupGlyph marks a folder whose subtree contains a git change (PRD
+// prd-git-change-indicator D4). One dim cell, deliberately neutral — it says
+// "something inside changed", not which status.
+const rollupGlyph = "●"
+
+// rowIndicator is the resolved git marker for one row's right column: a colored
+// badge (file: M/?/A/D/R/!; folder: ●) plus an optional diffstat delta. nil ⇒ no
+// indicator (clean path / ".." / git mode off). model.indicatorFor builds it; the
+// view turns it into the right-column string, honoring name > badge > delta (D8).
+type rowIndicator struct {
+	badge string
+	color color.Color
+	delta string // "+41 -3" / "+88" / "-54" / "" (no delta)
+}
+
+// fullPlain / badge are the two width candidates as plain strings (badge+delta,
+// then badge alone); fullStyled / badgeStyled are their colored renders. For a
+// folder or a change with no delta the two candidates coincide.
+func (ri *rowIndicator) fullPlain() string {
+	if ri.delta == "" {
+		return ri.badge
+	}
+	return ri.badge + " " + ri.delta
+}
+
+func (ri *rowIndicator) badgeStyled() string {
+	return lipgloss.NewStyle().Foreground(ri.color).Render(ri.badge)
+}
+
+func (ri *rowIndicator) fullStyled() string {
+	if ri.delta == "" {
+		return ri.badgeStyled()
+	}
+	return ri.badgeStyled() + " " + styleDelta(ri.delta)
+}
+
+// styleDelta colors each diffstat token: "+N" green, "-N" red (D12) — git's own
+// convention, read fast at a glance.
+func styleDelta(delta string) string {
+	parts := strings.Fields(delta)
+	for i, p := range parts {
+		if strings.HasPrefix(p, "-") {
+			parts[i] = gitDelStyle.Render(p)
+		} else {
+			parts[i] = gitAddStyle.Render(p)
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+// chooseIndicator picks the widest indicator candidate that fits beside a name of
+// width nw in w columns, honoring name > badge > delta (D8/FR4): try badge+delta,
+// then badge alone, else drop the indicator. Returns the chosen (plain, styled)
+// pair, or ("","") when nothing fits (the caller then truncates the name).
+func chooseIndicator(ind *rowIndicator, nw, w int) (plain, styled string) {
+	if ind == nil {
+		return "", ""
+	}
+	type cand struct{ plain, styled string }
+	cands := []cand{{ind.fullPlain(), ind.fullStyled()}}
+	if ind.delta != "" { // the narrower badge-only candidate exists only when delta can drop
+		cands = append(cands, cand{ind.badge, ind.badgeStyled()})
+	}
+	for _, c := range cands {
+		if nw+1+lipgloss.Width(c.plain) <= w {
+			return c.plain, c.styled
+		}
+	}
+	return "", ""
+}
+
+// renderEntryRow draws ONE listing row at w display columns — the single place a
+// row is formatted, so the list pane and the folder preview never disagree on
+// row format (docs/prd-consistent-file-listing.md §5.1). active=true marks the
+// list-pane cursor row with cursorActiveStyle's full-width accent (the only
+// cursor marker); the folder preview always passes active=false. ind is the
+// resolved git indicator (nil ⇒ none) shown in the right column where the file
+// size used to be (prd-git-change-indicator).
 //
-// listFocused tunes the cursor-row highlight (D10/FR12): when the list pane
-// holds focus the row uses the accent background; when focus is on the preview
-// the row dims to colDim, so the cursor still shows which file the preview
-// reflects without competing with the focused pane for the accent. listFocused
-// is only consulted on the active row — inactive rows ignore it.
+// listFocused tunes the cursor-row highlight (D10/FR12): accent background when
+// the list pane holds focus, colDim when focus is on the preview. Consulted only
+// on the active row — inactive rows ignore it.
 //
-// Layout:
-//   - dir → name + "/" tô dirStyle (the synthetic ".." keeps no slash, FR2).
-//   - file (inactive) → name tô fileStyle (bright headline), humanSize(size)
-//     tô dimStyle (muted supporting info, D8/FR9) — eye lands on the name
-//     first; the bytes column is metadata, not the headline.
-//   - file (active) → whole row uses one style so name AND size stay legible on
-//     the background (a dim foreground on accent would be unreadable); the mute
-//     rule does NOT apply to the cursor row.
-func renderEntryRow(e entry, w int, active, listFocused bool) string {
+// Styling:
+//   - dir → name + "/" in dirStyle (the synthetic ".." keeps no slash, FR2); a
+//     dirty folder adds ● (dimStyle) on the right via styleRow.
+//   - file (inactive) → name in fileStyle, badge in its status color, delta as a
+//     green/red diffstat (styleRow).
+//   - active → whole row one accent style, indicator laid out PLAIN so it stays
+//     legible on the highlight (a colored badge on the accent bg could wash out,
+//     D11) — the change type of the selected file reads from the preview pane.
+func renderEntryRow(e entry, ind *rowIndicator, w int, active, listFocused bool) string {
 	name := e.name
 	if e.isDir && e.name != ".." {
 		name += "/"
 	}
-	// Size is shown only for real files. Dirs (incl. "..") get no size: there
-	// is no meaningful single number for a directory in this glance UI.
-	size := ""
-	if !e.isDir {
-		size = humanSize(e.size)
-	}
 	if active {
-		// cursorActiveStyle.Width(w) pads the rendered string to exactly w
-		// columns so the highlight covers the whole pane width. Plain body
-		// (no per-segment styling) keeps name + size on the same fg.
 		st := cursorActiveStyle
 		if !listFocused {
-			// Focus is on the preview: keep the cursor visible but soften it to
-			// colDim so it reinforces the divider glow (which carries the accent
-			// toward the preview) instead of competing with it (D10).
-			// Background returns a copy — cursorActiveStyle is not mutated.
-			st = cursorActiveStyle.Background(colDim)
+			st = cursorActiveStyle.Background(colDim) // returns a copy; original untouched
 		}
-		return st.Width(w).Render(fitRow(name, size, w))
+		plain, _ := chooseIndicator(ind, lipgloss.Width(name), w)
+		return st.Width(w).Render(fitRow(name, plain, w))
 	}
 	if e.isDir {
-		// Dirs have no size column → fitRow with empty size returns the bare
-		// (possibly truncated) name, then dirStyle paints it whole.
-		return dirStyle.Render(fitRow(name, "", w))
+		return styleRow(name, dirStyle, ind, w)
 	}
-	// Inactive file row: split styling — name in fileStyle, size in dimStyle.
-	return styleFileRow(name, size, w)
+	return styleRow(name, fileStyle, ind, w)
 }
 
-// styleFileRow is fitRow's layout for an inactive file row, but with the
-// styling split: name tô fileStyle (bright), size tô dimStyle (muted), gap
-// between them left unstyled so the panel background shows through cleanly.
-// Single helper so the muted-size invariant (D8/FR9) has one source of truth
-// — and so fitRow stays a pure plain-string layout helper (the rest of the
-// callers and its existing tests do not need to know about styling).
-func styleFileRow(name, size string, w int) string {
+// styleRow lays out an inactive row: name (in nameStyle) flush left, the chosen
+// git indicator (already colored) flush right, the gap between left unstyled so
+// the panel background shows through. Priority name > badge > delta (D8): when no
+// indicator candidate fits, drop it and truncate the name. One helper for both
+// dir (●) and file (badge+delta) rows — fitRow stays a pure plain-string helper.
+func styleRow(name string, nameStyle lipgloss.Style, ind *rowIndicator, w int) string {
 	if w <= 0 {
 		return ""
 	}
-	if size == "" {
-		return fileStyle.Render(fitWidth(name, w))
+	plain, styled := chooseIndicator(ind, lipgloss.Width(name), w)
+	if plain == "" {
+		return nameStyle.Render(fitWidth(name, w))
 	}
-	nw := lipgloss.Width(name)
-	sw := lipgloss.Width(size)
-	if nw+1+sw <= w {
-		gap := w - nw - sw
-		return fileStyle.Render(name) + strings.Repeat(" ", gap) + dimStyle.Render(size)
-	}
-	// Combined too wide: drop size, keep (or truncate) the name — same FR6
-	// priority as fitRow's plain path.
-	return fileStyle.Render(fitWidth(name, w))
+	gap := w - lipgloss.Width(name) - lipgloss.Width(plain)
+	return nameStyle.Render(name) + strings.Repeat(" ", gap) + styled
 }
 
-// fitRow lays out name (flush left) and size (flush right) in w display
+// fitRow lays out name (flush left) and right (flush right) in w display
 // columns, returning a plain string (no ANSI) — caller wraps it in a single
-// style so escapes never nest.
+// style so escapes never nest. `right` is whatever sits in the trailing column
+// (the active row passes the plain git indicator candidate; "" for a clean/dir
+// row).
 //
-// Priority is name > size (FR6): when both can't fit, the size is dropped
-// before the name is truncated. Cases:
+// Priority is name > right (D8): when both can't fit, `right` is dropped before
+// the name is truncated. Cases:
 //   - w ≤ 0 → "".
-//   - size == "" (dirs / "..") → fitWidth(name, w) — no padding pretense.
-//   - name + ≥1 space + size ≤ w → name, spaces filling the gap, size at the
+//   - right == "" (dirs / ".." / clean) → fitWidth(name, w) — no padding pretense.
+//   - name + ≥1 space + right ≤ w → name, spaces filling the gap, right at the
 //     right edge; total width == w.
-//   - otherwise → fitWidth(name, w) (drop size; truncate name with "…" if it
+//   - otherwise → fitWidth(name, w) (drop right; truncate name with "…" if it
 //     still overflows).
 //
 // All measurements go through lipgloss.Width so CJK / wide glyphs measure as
 // the terminal draws them (a tab is already expanded in normalizeText).
-func fitRow(name, size string, w int) string {
+func fitRow(name, right string, w int) string {
 	if w <= 0 {
 		return ""
 	}
-	if size == "" {
+	if right == "" {
 		return fitWidth(name, w)
 	}
 	nw := lipgloss.Width(name)
-	sw := lipgloss.Width(size)
-	if nw+1+sw <= w {
-		gap := w - nw - sw
-		return name + strings.Repeat(" ", gap) + size
+	rw := lipgloss.Width(right)
+	if nw+1+rw <= w {
+		gap := w - nw - rw
+		return name + strings.Repeat(" ", gap) + right
 	}
-	// Combined too wide: drop size, keep (or truncate) the name.
+	// Combined too wide: drop right, keep (or truncate) the name.
 	return fitWidth(name, w)
 }
 
@@ -491,7 +549,10 @@ func (m model) renderPreview(w int) string {
 		for i := top; i < len(m.previewEntries) && i < top+bodyH; i++ {
 			// Preview rows are never the list's cursor row → active=false, which
 			// short-circuits the listFocused dim path; pass false for honesty.
-			lines = append(lines, renderEntryRow(m.previewEntries[i], w, false, false))
+			// Indicator resolves against the previewed folder's path so the same
+			// entry renders byte-identically here and in the list pane (FR5).
+			ind := m.indicatorFor(m.previewDirPath, m.previewEntries[i])
+			lines = append(lines, renderEntryRow(m.previewEntries[i], ind, w, false, false))
 		}
 		return strings.Join(lines, "\n")
 	}

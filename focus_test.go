@@ -404,7 +404,7 @@ func TestCursorRowDimWhenFocusPreview(t *testing.T) {
 	accentBg := bgParam(t, colAccent)
 	dimBg := bgParam(t, colDim)
 
-	focused := renderEntryRow(e, 30, true, true)
+	focused := renderEntryRow(e, nil, 30, true, true)
 	if !strings.Contains(focused, accentBg) {
 		t.Errorf("active+listFocused row should carry the accent bg %q; got %q", accentBg, focused)
 	}
@@ -412,7 +412,7 @@ func TestCursorRowDimWhenFocusPreview(t *testing.T) {
 		t.Errorf("active+listFocused row must not carry the dim bg %q; got %q", dimBg, focused)
 	}
 
-	dimmed := renderEntryRow(e, 30, true, false)
+	dimmed := renderEntryRow(e, nil, 30, true, false)
 	if !strings.Contains(dimmed, dimBg) {
 		t.Errorf("active+!listFocused row should carry the dim bg %q; got %q", dimBg, dimmed)
 	}
