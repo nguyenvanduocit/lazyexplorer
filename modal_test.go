@@ -126,6 +126,22 @@ func TestPaletteBodyCdErrorInBox(t *testing.T) {
 	}
 }
 
+func TestModalNoOverflow(t *testing.T) {
+	for _, sz := range []struct{ w, h int }{{80, 24}, {60, 24}} {
+		m := model{
+			mode: modeCommandPalette, width: sz.w, height: sz.h,
+			paletteFiltered: defaultCommands(), keymap: defaultKeyMap(),
+		}
+		m.entries = []entry{{name: "x.go"}}
+		out := m.View().Content
+		for i, ln := range strings.Split(out, "\n") {
+			if lipgloss.Width(ln) > sz.w {
+				t.Errorf("%dx%d row %d width %d > %d", sz.w, sz.h, i, lipgloss.Width(ln), sz.w)
+			}
+		}
+	}
+}
+
 func TestStatusBarModalHints(t *testing.T) {
 	pal := stripANSI((model{mode: modeCommandPalette, width: 100, height: 30}).renderStatus())
 	if !strings.Contains(pal, "enter") || !strings.Contains(pal, "esc") {
