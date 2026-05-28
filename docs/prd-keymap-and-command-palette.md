@@ -9,7 +9,7 @@
 > count-prefix — đó là quyết định sau khi đọc `tmp/crush` (charmbracelet/crush) thấy
 > modern keyboard-first TUI bỏ qua vim modal mà vẫn discoverable hơn vim nhiều.
 
-Status: **accepted** · Author: feature-dev session · Reviewer: critic (independent pass, 2026-05-28) · Ngày: 2026-05-28 · Baseline shipped: 2026-05-28 (keymap registry + command palette + help — ✅ `go build && go vet && go test ./... && go test -race ./...` green) · **Rev 2026-05-28b: command palette + help render as a floating Raycast/Spotlight modal (D9/D10/D21/D22, §5.6/§5.7) — accepted, implementation pending (T8–T14)**
+Status: **accepted** · Author: feature-dev session · Reviewer: critic (independent pass, 2026-05-28) · Ngày: 2026-05-28 · Baseline shipped: 2026-05-28 (keymap registry + command palette + help — ✅ `go build && go vet && go test ./... && go test -race ./...` green) · **Rev 2026-05-28b: command palette + help render as a floating Raycast/Spotlight modal (D9/D10/D21/D22, §5.6/§5.7) — shipped 2026-05-28 (T8–T14; ✅ `go build && go vet && go test ./... && go test -race ./...` green; visual verdict palette + help PASS at 80×24 and 60×24). T13 (cross-ref prose polish) deferred.**
 
 ---
 
@@ -1458,21 +1458,21 @@ Feature: Keymap registry & command palette
   `Update` switch case `modeCommandPalette`. *(palette.go, model.go)* ✅
 - [x] **T7 — Help handler.** `updateHelp` + `enterHelp`/`exitHelp`/`helpLineCount`
   in `palette.go`; `Update` switch case `modeHelp`. *(palette.go, model.go)* ✅
-- [ ] **T8 — Modal compositing (View).** `View()` builds the background (list +
+- [x] **T8 — Modal compositing (View).** `View()` builds the background (list +
   divider + real preview), then composes the active overlay box centered via
   `overlayCentered` (Canvas/Compositor/Layer, §5.6); add `renderModal` + `modalSize`;
-  remove `renderPreviewRegion` (preview pane always renders the real preview). *(view.go)*
-- [ ] **T9 — Box body + modal status (view.go).** `renderPaletteBody` (search/cd
+  remove `renderPreviewRegion` (preview pane always renders the real preview). *(view.go)* ✅
+- [x] **T9 — Box body + modal status (view.go).** `renderPaletteBody` (search/cd
   prompt at box top + filtered list) + `renderHelpBody` (grouped bindings, helpTop
   scroll, reuse `helpLineCount` clamp); `renderStatus` palette/help cases → modal
-  short-help (§5.7). `shortHelp`/`fullHelp`/`renderShortHelp` unchanged. *(view.go, model.go)*
-- [ ] **T10 — `theme.go`.** Add `modalBoxStyle` (rounded border `colAccent` + opaque
+  short-help (§5.7). `shortHelp`/`fullHelp`/`renderShortHelp` unchanged. *(view.go, model.go)* ✅
+- [x] **T10 — `theme.go`.** Add `modalBoxStyle` (rounded border `colAccent` + opaque
   dark bg) + constants `modalTargetCols=56`/`modalTargetRows`, `modalMargin`,
   `modalMinCols`/`modalMinRows`. Body reuses `cursorActiveStyle`/`dimStyle`/`fileStyle`/
-  `promptStyle`. *(theme.go)*
+  `promptStyle`. *(theme.go)* ✅
 
-- [ ] **T11a — Tests (full target list).** State-machine items shipped via the
-  `[x] T11b` below; the modal items (last three bullets) are pending. *(`*_test.go`)*
+- [x] **T11a — Tests (full target list).** State-machine items shipped via the
+  `[x] T11b` below; the modal items (last three bullets) shipped in `modal_test.go`. *(`*_test.go`)* ✅
   - `TestKeyMapAllBindingsHaveHelp`: mỗi field của `KeyMap` có
     non-empty `Help().Key` + `.Desc`.
   - `TestDispatchByKeyMatches`: gửi `KeyPressMsg{Code:'j'}` qua `Update` →
@@ -1503,32 +1503,33 @@ Feature: Keymap registry & command palette
   - `-race`: parallel Update calls with palette messages không race trên
     palette state.
   - `TestOverlayCenteredComposites` (modal): styled (ANSI) bg composite sạch
-    **dưới** box, mỗi row == `m.width`, bg vẫn hiện ở margin (D21/D22).
-  - `TestModalSizeClampsNarrow` (modal): 60×24 và width<80 (vertical) → box vừa,
-    không tràn (floor giống `leftInnerWidth`).
-  - `TestPaletteBodyPromptAtTop` (modal): row 0 của box là search prompt `> …▏`.
+    **dưới** box, mỗi row == `m.width`, bg vẫn hiện ở margin (D21/D22). ✅
+  - `TestModalSizeClamps` + `TestModalNoOverflow` (modal): 60×24 và width<80
+    (vertical) → box vừa, không tràn (floor giống `leftInnerWidth`). ✅
+  - `TestPaletteBodyPromptAtTop` (modal): row 0 của box là search prompt `> …▏`. ✅
 
 - [x] **T11b — Tests shipped (state-machine baseline).** `palette_test.go` covers: `TestKeyMatchContract`,
   `TestCommandPaletteOpenClose`, `TestCommandPaletteFilter`, `TestCommandPaletteNav`,
   `TestCommandReload`, `TestCommandCdValid`, `TestCommandCdRejects` (file/outside-root/
   not-found), `TestCommandQuit`, `TestHelpOpenScrollClose`, `TestHelpScrollClamps`,
   `TestHelpQuitClosesNotExits`, `TestShortHelpByFocus`, `TestFullHelpGroups`,
-  `TestResolvePath`, `TestSelectedAbsPathDotDot`, `TestPaletteRendersInView`,
+  `TestResolvePath`, `TestSelectedAbsPathDotDot`, `TestPaletteBodyRenders`,
   `TestHelpRendersInView`. `-race` green. *(palette_test.go)* ✅
 
-- [ ] **T12 — Visual verdict (modal).** Render palette + help **modal** frames at
-  80×24 and 60×24; visual-verdict: box centered, rounded accent border, search
-  prompt at box top, background panes visible around the box, no row overflow. *(zz_dump_test.go)*
+- [x] **T12 — Visual verdict (modal).** Rendered palette + help **modal** frames at
+  80×24 and 60×24; visual-verdict PASS: box centered, rounded accent border, search
+  prompt at box top, background panes visible around the box, no row overflow. *(zz_dump_test.go)* ✅
 
 - [ ] **T13 — Update existing PRDs cross-ref wording.** The bindings ARE migrated
   into the registry (code is consistent), but the prose cross-refs in
   `prd-pane-focus.md`/`prd-search.md`/`prd-smooth-preview-scroll.md` §sections were
   not re-touched. Optional doc polish — deferred. *(docs/*)*
 
-- [ ] **T14 — Verify (modal).** `go build -o lazyexplorer . && go vet ./... &&
-  go test ./... && go test -race ./...` green. Manual acceptance: Ctrl+P / `?` open
-  a centered modal over a still-visible tree + preview; cd flow; narrow-terminal
-  clamp (60×24, vertical); esc / re-press toggle closes. *(gate)*
+- [x] **T14 — Verify (modal).** `go build -o lazyexplorer . && go vet ./... &&
+  go test ./... && go test -race ./...` green (ĐÃ VERIFY ✅ 2026-05-28). Manual
+  acceptance: Ctrl+P / `?` open a centered modal over a still-visible tree +
+  preview; cd flow; narrow-terminal clamp (60×24, vertical); esc / re-press toggle
+  closes. *(gate)* ✅
 
 ## 8. Files chạm tới
 
