@@ -735,26 +735,13 @@ func (m model) renderStatus() string {
 		}
 		return p
 	case modeCommandPalette:
-		// Stage 0 is a generic filter prompt "> query▏"; stage 1 prefixes the
-		// chosen command so the user sees what they are arging ("cd > path▏").
-		var prompt string
-		if m.paletteStage == 0 {
-			prompt = promptStyle.Background(colAccent).Foreground(colSelFg).
-				Render("> " + m.paletteQuery + "▏")
-		} else {
-			sel := m.paletteFiltered[m.paletteCursor]
-			prompt = promptStyle.Background(colAccent).Foreground(colSelFg).
-				Render(sel.Name + " > " + m.paletteSecondaryInput + "▏")
-		}
-		if m.statusMsg != "" {
-			return prompt + " " + dimStyle.Render(m.statusMsg)
-		}
-		return prompt
+		// The prompt + command list + any submit error (cd jail-block) live in
+		// the modal box now; the status bar just carries the modal short-help.
+		return statusBarStyle.Width(m.width).Render(fitWidth(
+			"[enter] run   [esc] close   "+dimStyle.Render("[↑↓] move"), m.width-2))
 	case modeHelp:
 		return statusBarStyle.Width(m.width).Render(fitWidth(
-			"press ? or esc to close   "+dimStyle.Render("j/k scroll"),
-			m.width-2,
-		))
+			"[j/k] scroll   [esc] close", m.width-2))
 	default:
 		// Focus is signalled by the divider glow (renderList/View draw it toward
 		// m.focusPane) plus the dimmed cursor row — not by a status-bar chip — so

@@ -126,6 +126,21 @@ func TestPaletteBodyCdErrorInBox(t *testing.T) {
 	}
 }
 
+func TestStatusBarModalHints(t *testing.T) {
+	pal := stripANSI((model{mode: modeCommandPalette, width: 100, height: 30}).renderStatus())
+	if !strings.Contains(pal, "enter") || !strings.Contains(pal, "esc") {
+		t.Errorf("palette status missing run/close hints: %q", pal)
+	}
+	// The query/prompt must NOT be in the status bar anymore (it lives in the box).
+	if strings.Contains(pal, "▏") {
+		t.Errorf("palette status still shows the input caret: %q", pal)
+	}
+	help := stripANSI((model{mode: modeHelp, width: 100, height: 30}).renderStatus())
+	if !strings.Contains(help, "scroll") || !strings.Contains(help, "esc") {
+		t.Errorf("help status missing scroll/close hints: %q", help)
+	}
+}
+
 func TestModalRendersPaletteInView(t *testing.T) {
 	m := model{
 		mode: modeCommandPalette, width: 100, height: 30,
