@@ -54,4 +54,24 @@ var (
 	promptStyle = lipgloss.NewStyle().
 			Padding(0, 1).
 			Bold(true)
+
+	// modalBoxStyle is the floating command-palette / help box: rounded accent
+	// border + opaque dark background so it reads as lifted off the panes behind
+	// it (D9/D22). One accent, the same colAccent as the cursor row.
+	modalBoxStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(colAccent).
+			Background(lipgloss.Color("#1A1A1A")).
+			Foreground(colFg).
+			Padding(0, 1)
+)
+
+// Modal sizing — OUTER box dims; inner content = outer − modalBoxStyle frame
+// (subtracted at runtime in modalSize). Clamped to fit narrow/short terminals.
+const (
+	modalMargin     = 2  // min screen cols/rows kept around the box
+	modalTargetCols = 56 // preferred outer width
+	modalTargetRows = 16 // preferred outer height
+	modalMinCols    = 24 // floor outer width (degenerate terminal)
+	modalMinRows    = 6  // floor outer height
 )

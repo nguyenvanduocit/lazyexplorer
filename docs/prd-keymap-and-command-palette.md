@@ -9,7 +9,7 @@
 > count-prefix — đó là quyết định sau khi đọc `tmp/crush` (charmbracelet/crush) thấy
 > modern keyboard-first TUI bỏ qua vim modal mà vẫn discoverable hơn vim nhiều.
 
-Status: **accepted** · Author: feature-dev session · Reviewer: critic (independent pass, 2026-05-28) · Ngày: 2026-05-28 · Shipped: 2026-05-28 (✅ `go build && go vet && go test ./... && go test -race ./...` green)
+Status: **accepted** · Author: feature-dev session · Reviewer: critic (independent pass, 2026-05-28) · Ngày: 2026-05-28 · Baseline shipped: 2026-05-28 (keymap registry + command palette + help — ✅ `go build && go vet && go test ./... && go test -race ./...` green) · **Rev 2026-05-28b: command palette + help render as a floating Raycast/Spotlight modal (D9/D10/D21/D22, §5.6/§5.7) — shipped 2026-05-28 (T8–T14; ✅ `go build && go vet && go test ./... && go test -race ./...` green; visual verdict palette + help PASS at 80×24 and 60×24). T13 (cross-ref prose polish) deferred.**
 
 ---
 
@@ -248,9 +248,9 @@ Refactor keybind từ inline switch + hardcoded hint sang `bubbles/v2 key.Bindin
   giữa với body là `FullHelp()` (D13), nền (list + preview) hiện phía sau box.
   `?`/`Esc` đóng. Help body **chỉ scrollable** qua `j/k`; không có sub-selection.
 
-- **FR13** — Status bar (`view.go:487`) thay hardcoded hint bằng
-  `m.shortHelp()` join with `dimStyle`. `shortHelp` returns
-  `[]key.Binding` filtered theo mode + focusPane.
+- **FR13** — Status bar (`renderStatus` default case, `view.go:703-726`) renders
+  `m.shortHelp()` via `renderShortHelp`. `shortHelp` returns `[]key.Binding`
+  filtered theo focusPane.
 
 - **FR14** — `shortHelp` cho mỗi mode (D10 chốt nội dung):
   | mode | bindings shown |
@@ -866,9 +866,9 @@ func (m model) updateHelp(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 // helpLineCount returns the total rendered help-body line count (group titles +
-// binding rows + blank separators) — the same number renderHelp builds. The
-// clamp in updateHelp and renderHelp both read it so scroll never overshoots
-// the content. (One source of truth for "how tall is the help body".)
+// binding rows + blank separators) — the same number renderHelpBody builds. The
+// clamp in updateHelp and the slice in renderHelpBody both read it so scroll
+// never overshoots the content. (One source of truth for "how tall is the help body".)
 func (m model) helpLineCount() int {
     n := 0
     for _, group := range m.fullHelp() {
@@ -916,11 +916,13 @@ dim, background shows through everywhere the box does not cover):
 
 ```go
 // overlayCentered draws `box` centered over `bg` (a full w×h rendered screen)
-// and returns the composited string.
+// and returns the composited string. Centered within the body region
+// (rows [0, h-1)) so the status row at h-1 — which carries the modal hints —
+// stays visible.
 func overlayCentered(bg, box string, w, h int) string {
     boxW, boxH := lipgloss.Width(box), lipgloss.Height(box)
     cx := max(0, (w-boxW)/2)
-    cy := max(0, (h-boxH)/2)
+    cy := max(0, ((h-1)-boxH)/2)
     canvas := lipgloss.NewCanvas(w, h)
     return canvas.Compose(lipgloss.NewCompositor(
         lipgloss.NewLayer(bg).Z(0),
@@ -946,12 +948,30 @@ func (m model) renderModal() (string, bool) {
     }
 }
 
-// modalSize clamps the inner box to fit. At m.width < 80 (vertical mode) or a
-// short terminal the box shrinks but never overflows.
-func (m model) modalSize() (w, h int) {
-    w = min(modalTargetCols, m.width-modalMargin*2)        // modalTargetCols=56
-    h = min(modalTargetRows, (m.height-1)-modalMargin*2)   // -1: status row
-    return max(w, modalMinCols), max(h, modalMinRows)
+// Modal sizing constants — these are OUTER box dims; the inner content area is
+// outer − the modalBoxStyle border+padding frame (computed at runtime, below).
+const (
+    modalMargin     = 2  // min screen cols/rows kept around the box
+    modalTargetCols = 56 // preferred outer width
+    modalTargetRows = 16 // preferred outer height
+    modalMinCols    = 24 // floor outer width (degenerate terminal)
+    modalMinRows    = 6  // floor outer height
+)
+
+// modalSize returns the INNER content dimensions handed to renderPaletteBody /
+// renderHelpBody. The OUTER box (inner + modalBoxStyle frame) is clamped to fit
+// m.width/height minus a margin each side, with a floor — same best-effort
+// discipline as leftInnerWidth (view.go:196): a narrow (<80, vertical) or short
+// terminal shrinks the box but it never overflows. Subtracting the frame here
+// (not in the caller) is why a bordered+padded box still fits at width 60.
+func (m model) modalSize() (innerW, innerH int) {
+    fw := modalBoxStyle.GetHorizontalFrameSize() // border + padding, both sides
+    fh := modalBoxStyle.GetVerticalFrameSize()
+    outerW := min(modalTargetCols, m.width-modalMargin*2)
+    outerH := min(modalTargetRows, (m.height-1)-modalMargin*2) // -1: status row
+    outerW = min(max(outerW, modalMinCols), m.width)           // floor, then never exceed screen
+    outerH = min(max(outerH, modalMinRows), m.height-1)
+    return max(1, outerW-fw), max(1, outerH-fh)
 }
 ```
 
@@ -974,10 +994,15 @@ func (m model) renderPaletteBody(w, h int) string {
     }
     lines = append(lines, "") // blank between prompt and body
 
-    // Stage 1: body is the chosen command's description for context.
+    // Stage 1: body is the chosen command's description, plus any submit error
+    // (e.g. a cd jail-block) shown INSIDE the box next to the input the user is
+    // correcting — not stranded at the screen bottom (Raycast-style).
     if m.paletteStage == 1 {
         sel := m.paletteFiltered[m.paletteCursor]
         lines = append(lines, dimStyle.Render(fitWidth(sel.Description, w)))
+        if m.statusMsg != "" {
+            lines = append(lines, "", dimStyle.Render(fitWidth(m.statusMsg, w)))
+        }
         return strings.Join(lines, "\n")
     }
 
@@ -1034,31 +1059,23 @@ func (m model) renderHelpBody(w, h int) string {
 > truyền vào (giờ là box-body rows, không phải preview-pane rows) — clamp logic
 > không đổi.
 
-### 5.7 Status bar — prompt + ShortHelp (`view.go:475-499`)
+### 5.7 Status bar — ShortHelp + modal hints (`view.go:658-728`)
 
 ```go
 func (m model) renderStatus() string {
     switch m.mode {
     case modeConfirmDelete:
-        // unchanged: view.go:478-481
+        // unchanged: delete-confirm prompt
     case modeRename:
-        // unchanged: view.go:482-485
+        // unchanged: rename prompt
     case modeCommandPalette:
-        var prompt string
-        if m.paletteStage == 0 {
-            prompt = promptStyle.Background(colAccent).Foreground(colSelFg).
-                Render("> " + m.paletteQuery + "▏")
-        } else {
-            sel := m.paletteFiltered[m.paletteCursor]
-            prompt = promptStyle.Background(colAccent).Foreground(colSelFg).
-                Render(sel.Name + " > " + m.paletteSecondaryInput + "▏")
-        }
-        return prompt
+        // The prompt + command list + any submit error (cd jail-block) live in
+        // the modal box now (§5.6); the status bar just carries the short-help.
+        return statusBarStyle.Width(m.width).Render(fitWidth(
+            "[enter] run   [esc] close   "+dimStyle.Render("[↑↓] move"), m.width-2))
     case modeHelp:
         return statusBarStyle.Width(m.width).Render(fitWidth(
-            "press ? or esc to close   " + dimStyle.Render("j/k scroll"),
-            m.width-2,
-        ))
+            "[j/k] scroll   [esc] close", m.width-2))
     default:
         // ShortHelp replaces the hardcoded hint string here.
         hints := renderShortHelp(m.shortHelp())
@@ -1195,10 +1212,20 @@ Marker comment ở `model.go` đầu `updateNormal` sau khi ship PRD này:
   No Abstractions Until Proven. KeyMap hiện là single struct → edit nguồn
   recompile cho expert; nếu nhiều user xin remap, thêm loader sau.
 
-- **Help overlay popup floating (vs full overlay vào preview pane)**:
-  Cần dialog stack manager (crush có `m.dialog.HasDialogs` —
-  `tmp/crush/.../ui.go:1893`). Premature cho 2-overlay surface; overlay vào
-  preview pane đơn giản, layout không thay đổi, user vẫn thấy list pane.
+- **Dim/shade backdrop sau modal** (Spotlight-style darkening):
+  Cần re-style mọi cell nền → thêm render cost + một style mới. Box opaque nổi
+  trên nền nguyên (D22) đủ rõ cho v1; thêm dim sau nếu user thấy box chìm vào nền.
+
+- **Click-to-select trong modal** (mouse trên palette/help):
+  `handleMouse` early-return khi `mode != modeNormal` (D19) → modal hiện
+  keyboard-only. lipgloss `Compositor.Hit` cho phép hit-test layer về sau; defer
+  cho tới khi có request.
+
+- **Dialog-stack manager** (nhiều modal chồng nhau):
+  Crush có `m.dialog` stack (`tmp/crush/.../dialog/dialog.go:51-98`,
+  `HasDialogs`/`OpenDialog`/`CloseFrontDialog`) cho nhiều dialog lồng nhau.
+  lazyexplorer chỉ có 2 overlay loại trừ lẫn nhau (palette XOR help) → một `mode`
+  enum đủ, không cần stack. Thêm khi xuất hiện overlay thứ 3 lồng trong overlay.
 
 - **`open in $EDITOR`** command trong palette:
   Defer per `prd-pane-focus.md` defer list — agent đã edit file, app không cần
@@ -1213,9 +1240,6 @@ Marker comment ở `model.go` đầu `updateNormal` sau khi ship PRD này:
 
 - **Async command Run** (vd `cd` reload là blocking nhưng hôm nay đủ nhanh):
   `Run` đã return `tea.Cmd` để extensible. v1 mọi command synchronous.
-
-- **`?` mở popup floating overlapping preview** (vs full-pane):
-  Cùng lý do help overlay defer popup.
 
 - **Configurable palette commands** (load từ file, đăng ký từ plugin):
   Plugin system out-of-scope. `defaultCommands()` hardcoded ổn cho v1.
@@ -1253,9 +1277,9 @@ Feature: Keymap registry & command palette
   Scenario: Ctrl+P opens the command palette
     Given the focus is on the list pane
     When I press ctrl+p
-    Then the preview pane region renders the palette command list
-    And the status bar shows a "> ▏" prompt
-    And the cursor highlights the first command
+    Then a command palette appears as a centered modal over the panes
+    And a search prompt sits at the top of the modal
+    And the first command is highlighted
 
   Scenario: Type to filter palette commands
     Given the command palette is open
@@ -1274,9 +1298,9 @@ Feature: Keymap registry & command palette
     Given the command palette is open
     And "cd" is highlighted
     When I press Enter
-    Then the palette enters a second stage
-    And the status bar prompt becomes "cd > ▏"
-    And the preview pane shows the cd command's description
+    Then the palette enters its path-input stage
+    And the modal's prompt becomes "cd > ▏" at the top of the box
+    And the modal body shows the cd command's description
 
   Scenario: cd to a path inside the jail succeeds
     Given the cd path-input stage is open
@@ -1287,7 +1311,7 @@ Feature: Keymap registry & command palette
   Scenario: cd to a path outside the jail is blocked
     Given the cd path-input stage is open
     When I type "/etc" and press Enter
-    Then the status bar shows "⚠ blocked: outside root"
+    Then the modal shows "⚠ blocked: outside root" under the cd prompt
     And the palette remains on the cd stage so I can correct the path
 
   Scenario: Backspace on empty palette query closes the palette
@@ -1306,20 +1330,25 @@ Feature: Keymap registry & command palette
   Scenario: ? opens the full help overlay
     Given the focus is on the list pane
     When I press ?
-    Then the preview pane region renders the full help table
+    Then the full help table appears as a centered modal over the panes
     And the help is grouped under headings Navigation, Preview, Mutation, Modes, Misc
     And each row shows a key chord and a one-line description
 
   Scenario: Esc or ? closes the help overlay
     Given the help overlay is open
     When I press Esc
-    Then the help overlay closes and the preview pane returns
+    Then the help modal closes and the panes are fully visible again
     When I open the help again and press ?
     Then the help overlay closes the same way
 
-  Scenario: Help overlay scrolls when content exceeds the pane
+  Scenario: The panes stay visible behind an open modal
+    Given the command palette is open as a centered modal
+    Then the file list and preview remain visible around the modal box
+    And the modal box is centered on screen
+
+  Scenario: Help overlay scrolls when content exceeds the modal
     Given the help overlay is open in a short terminal
-    And the help body is longer than the visible pane
+    And the help body is longer than the visible modal box
     When I press j
     Then the help body scrolls down one row
     When I press k
@@ -1360,15 +1389,15 @@ Feature: Keymap registry & command palette
 3. Gõ `cd` → list filter còn `cd`. Gõ `xyz` → list rỗng, dòng `(no matching
    commands)` hiện.
 4. Enter trên `reload` → palette đóng, list pane re-read, status "reloaded".
-5. Enter trên `cd` → prompt đổi `cd > ▏`, preview pane mô tả cd command.
+5. Enter trên `cd` → prompt ở đỉnh box đổi `cd > ▏`, body box mô tả cd command.
 6. Trong cd stage, gõ `docs` Enter → `m.cwd` về `<root>/docs`.
-7. Trong cd stage, gõ `/etc` Enter → status `⚠ blocked: outside root`, palette
-   vẫn ở cd stage.
+7. Trong cd stage, gõ `/etc` Enter → box hiện `⚠ blocked: outside root` dưới
+   prompt, palette vẫn ở cd stage.
 7b. Trong cd stage, gõ path tới một **file** trong root (vd `model.go`) Enter →
-   status `⚠ not a directory: model.go`, palette vẫn ở cd stage (FR10 — không
+   box hiện `⚠ not a directory: model.go`, palette vẫn ở cd stage (FR10 — không
    để `m.reload()` gọi readDir trên file rồi set entries=nil).
 8. Trong cd stage, gõ `~/.config` Enter (with `~` expand to `$HOME`) → jail
-   block (vì home ngoài root v.v.); status error.
+   block (vì home ngoài root v.v.); box hiện error dưới prompt.
 8b. Cursor trên synthetic `..`, palette → `copy path` Enter → clipboard chứa abs
    path của **parent đã resolve** (jail-clamped tại root), KHÔNG phải literal
    `<cwd>/..` (FR9).
@@ -1376,7 +1405,7 @@ Feature: Keymap registry & command palette
 10. Esc ở cd stage → quay về stage 1; Esc lần nữa → đóng palette.
 11. `?` mở help overlay; 5 group hiện đúng thứ tự Navigation/Preview/Mutation/
     Modes/Misc.
-12. Help overlay `j`/`k` scroll (nếu nội dung dài hơn pane); Esc đóng.
+12. Help overlay `j`/`k` scroll (nếu nội dung dài hơn modal box); Esc đóng.
 13. `?` lần nữa đóng help (toggle).
 14. `q` trong help → đóng help (KHÔNG quit app — surprise avoidance).
 15. `q` trong palette stage 1 (đang gõ command name) → KHÔNG quit; ký tự `q`
@@ -1429,14 +1458,21 @@ Feature: Keymap registry & command palette
   `Update` switch case `modeCommandPalette`. *(palette.go, model.go)* ✅
 - [x] **T7 — Help handler.** `updateHelp` + `enterHelp`/`exitHelp`/`helpLineCount`
   in `palette.go`; `Update` switch case `modeHelp`. *(palette.go, model.go)* ✅
-- [x] **T8 — View render.** `renderPreviewRegion` swaps the preview pane to
-  `renderPalette`/`renderHelp` in both orientations; helpers in `view.go`. *(view.go)* ✅
-- [x] **T9 — `renderStatus` + `shortHelp`/`fullHelp`/`renderShortHelp`.** Default
-  branch uses `renderShortHelp(m.shortHelp())`; palette/help status cases added. *(view.go, model.go)* ✅
-- [x] **T10 — `theme.go`.** No new style — palette/help reuse `cursorActiveStyle`,
-  `dimStyle`, `renderingStyle`, `fileStyle`, `statusBarStyle`. Confirmed. *(theme.go — no change)* ✅
+- [x] **T8 — Modal compositing (View).** `View()` builds the background (list +
+  divider + real preview), then composes the active overlay box centered via
+  `overlayCentered` (Canvas/Compositor/Layer, §5.6); add `renderModal` + `modalSize`;
+  remove `renderPreviewRegion` (preview pane always renders the real preview). *(view.go)* ✅
+- [x] **T9 — Box body + modal status (view.go).** `renderPaletteBody` (search/cd
+  prompt at box top + filtered list) + `renderHelpBody` (grouped bindings, helpTop
+  scroll, reuse `helpLineCount` clamp); `renderStatus` palette/help cases → modal
+  short-help (§5.7). `shortHelp`/`fullHelp`/`renderShortHelp` unchanged. *(view.go, model.go)* ✅
+- [x] **T10 — `theme.go`.** Add `modalBoxStyle` (rounded border `colAccent` + opaque
+  dark bg) + constants `modalTargetCols=56`/`modalTargetRows`, `modalMargin`,
+  `modalMinCols`/`modalMinRows`. Body reuses `cursorActiveStyle`/`dimStyle`/`fileStyle`/
+  `promptStyle`. *(theme.go)* ✅
 
-- [ ] **T11 — Tests.** *(`*_test.go`)*
+- [x] **T11a — Tests (full target list).** State-machine items shipped via the
+  `[x] T11b` below; the modal items (last three bullets) shipped in `modal_test.go`. *(`*_test.go`)* ✅
   - `TestKeyMapAllBindingsHaveHelp`: mỗi field của `KeyMap` có
     non-empty `Help().Key` + `.Desc`.
   - `TestDispatchByKeyMatches`: gửi `KeyPressMsg{Code:'j'}` qua `Update` →
@@ -1466,29 +1502,34 @@ Feature: Keymap registry & command palette
     name="reload", success=true.
   - `-race`: parallel Update calls with palette messages không race trên
     palette state.
+  - `TestOverlayCenteredComposites` (modal): styled (ANSI) bg composite sạch
+    **dưới** box, mỗi row == `m.width`, bg vẫn hiện ở margin (D21/D22). ✅
+  - `TestModalSizeClamps` + `TestModalNoOverflow` (modal): 60×24 và width<80
+    (vertical) → box vừa, không tràn (floor giống `leftInnerWidth`). ✅
+  - `TestPaletteBodyPromptAtTop` (modal): row 0 của box là search prompt `> …▏`. ✅
 
-- [x] **T11 — Tests.** `palette_test.go` covers: `TestKeyMatchContract`,
+- [x] **T11b — Tests shipped (state-machine baseline).** `palette_test.go` covers: `TestKeyMatchContract`,
   `TestCommandPaletteOpenClose`, `TestCommandPaletteFilter`, `TestCommandPaletteNav`,
   `TestCommandReload`, `TestCommandCdValid`, `TestCommandCdRejects` (file/outside-root/
   not-found), `TestCommandQuit`, `TestHelpOpenScrollClose`, `TestHelpScrollClamps`,
   `TestHelpQuitClosesNotExits`, `TestShortHelpByFocus`, `TestFullHelpGroups`,
-  `TestResolvePath`, `TestSelectedAbsPathDotDot`, `TestPaletteRendersInView`,
+  `TestResolvePath`, `TestSelectedAbsPathDotDot`, `TestPaletteBodyRenders`,
   `TestHelpRendersInView`. `-race` green. *(palette_test.go)* ✅
 
-- [x] **T12 — Visual smoke.** Palette + help frames rendered (90×16 / 90×22) and
-  eyeballed: command list + descriptions aligned in the preview region with a
-  `> ▏` status prompt; help shows grouped, column-aligned bindings. Done as a
-  manual render smoke rather than a gated `zz_dump` + `visual-verdict` fixture. ✅
+- [x] **T12 — Visual verdict (modal).** Rendered palette + help **modal** frames at
+  80×24 and 60×24; visual-verdict PASS: box centered, rounded accent border, search
+  prompt at box top, background panes visible around the box, no row overflow. *(zz_dump_test.go)* ✅
 
 - [ ] **T13 — Update existing PRDs cross-ref wording.** The bindings ARE migrated
   into the registry (code is consistent), but the prose cross-refs in
   `prd-pane-focus.md`/`prd-search.md`/`prd-smooth-preview-scroll.md` §sections were
   not re-touched. Optional doc polish — deferred. *(docs/*)*
 
-- [x] **T14 — Verify.** `go build -o lazyexplorer . && go vet ./... && go test ./...
-  && go test -race ./...` green (ĐÃ VERIFY ✅ 2026-05-28). `rg '"J"|"K"' model.go`
-  → 0 (legacy keys stay removed). Manual acceptance: palette open/filter/run,
-  help scroll/close exercised via tests + render smoke.
+- [x] **T14 — Verify (modal).** `go build -o lazyexplorer . && go vet ./... &&
+  go test ./... && go test -race ./...` green (ĐÃ VERIFY ✅ 2026-05-28). Manual
+  acceptance: Ctrl+P / `?` open a centered modal over a still-visible tree +
+  preview; cd flow; narrow-terminal clamp (60×24, vertical); esc / re-press toggle
+  closes. *(gate)* ✅
 
 ## 8. Files chạm tới
 
@@ -1498,8 +1539,8 @@ Feature: Keymap registry & command palette
 | `keys.go` *(mới)* | `type KeyMap struct` (~22 field); `defaultKeyMap() KeyMap` |
 | `commands.go` *(mới)* | `type Command struct{Name,Description,NeedsArg,Run}`; `defaultCommands() []Command`; `writeClipboard(text string) error`; `resolvePath(cwd, in string) (string, error)`; `errClipboardUnsupported` sentinel |
 | `model.go` | + field `keymap KeyMap` + palette state (`paletteStage`, `paletteQuery`, `paletteSecondaryInput`, `paletteCursor`, `paletteFiltered`) + help state (`helpTop`); + mode enum `modeCommandPalette`, `modeHelp`; + helper `enterCommandPalette`, `exitCommandPalette`, `applyPaletteFilter`, `enterHelp`, `exitHelp`, `shortHelp`, `fullHelp`; + handler `updateCommandPalette`, `updateHelp`; `updateNormal` refactor sang `key.Matches` dispatch (§5.3); `newModel` init `m.keymap = defaultKeyMap()`; `Update` switch thêm case `modeCommandPalette`, `modeHelp` |
-| `view.go` | `View()` branch render palette/help vào preview pane region (§5.6); `renderPalette`, `renderHelp` mới; `renderStatus` case `modeCommandPalette` + `modeHelp` + default case dùng `renderShortHelp(m.shortHelp())` thay hardcoded hint string (`view.go:487`); helper `renderShortHelp` |
-| `theme.go` | (likely no change) confirm `cursorActiveStyle`/`dimStyle`/`renderingStyle` đủ |
+| `view.go` | `View()` composes the modal box over the background via `overlayCentered` (Canvas/Compositor/Layer, §5.6); `renderModal` + `modalSize` mới; `renderPaletteBody`/`renderHelpBody` (prompt ở đỉnh box); `renderPreviewRegion` **removed** (preview pane luôn render preview thật); `renderStatus` palette/help cases → modal short-help (§5.7); `renderShortHelp`/`shortHelp`/`fullHelp` unchanged |
+| `theme.go` | + `modalBoxStyle` (rounded border `colAccent` + opaque dark bg) + constants `modalTargetCols`/`modalTargetRows`, `modalMargin`, `modalMinCols`/`modalMinRows`; body reuse `cursorActiveStyle`/`dimStyle`/`fileStyle`/`promptStyle` |
 | `keys_contract_test.go` *(mới)* | API verify dep (T1) |
 | `palette_test.go` *(mới)* | palette open/close/filter/run + cd valid/invalid + clipboard |
 | `help_test.go` *(mới)* | help open/scroll/close + q-doesn't-quit-app |

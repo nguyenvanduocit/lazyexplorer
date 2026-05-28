@@ -210,6 +210,56 @@ func (m model) leftInnerWidth() int {
 	return li
 }
 
+// modalSize returns the INNER content dimensions handed to renderPaletteBody /
+// renderHelpBody. The OUTER box (inner + modalBoxStyle frame) is clamped to fit
+// m.width/height minus a margin each side, with a floor — same best-effort
+// discipline as leftInnerWidth: a narrow (<80, vertical) or short terminal
+// shrinks the box but it never overflows. Subtracting the frame here (not in the
+// caller) is why a bordered+padded box still fits at width 60.
+func (m model) modalSize() (innerW, innerH int) {
+	fw := modalBoxStyle.GetHorizontalFrameSize()
+	fh := modalBoxStyle.GetVerticalFrameSize()
+	outerW := min(modalTargetCols, m.width-modalMargin*2)
+	outerH := min(modalTargetRows, (m.height-1)-modalMargin*2) // -1: status row
+	outerW = min(max(outerW, modalMinCols), m.width)           // floor, then never exceed screen
+	outerH = min(max(outerH, modalMinRows), m.height-1)
+	return max(1, outerW-fw), max(1, outerH-fh)
+}
+
+// overlayCentered draws box centered over bg (a full w×h rendered screen) and
+// returns the composited string. The box is centered within the body region
+// (rows [0, h-1)) so the status row at h-1 — which carries the modal hints —
+// stays visible. Background shows through everywhere the box does not cover
+// (D21/D22 — no dim): the bg layer at z=0 paints every cell, the box layer at
+// z=1 only the cells it occupies.
+func overlayCentered(bg, box string, w, h int) string {
+	boxW, boxH := lipgloss.Width(box), lipgloss.Height(box)
+	cx := max(0, (w-boxW)/2)
+	cy := max(0, ((h-1)-boxH)/2)
+	canvas := lipgloss.NewCanvas(w, h)
+	return canvas.Compose(lipgloss.NewCompositor(
+		lipgloss.NewLayer(bg).Z(0),
+		lipgloss.NewLayer(box).X(cx).Y(cy).Z(1),
+	)).Render()
+}
+
+// renderModal returns the styled, bordered box for the active overlay mode and
+// ok=true; in normal mode it returns ok=false (no overlay). modalSize hands the
+// body its inner dimensions; modalBoxStyle adds the border + padding frame.
+// .Width(bw) pins the box to the clamped inner width so short content does not
+// produce a too-narrow box and the border stays rectangular.
+func (m model) renderModal() (string, bool) {
+	bw, bh := m.modalSize()
+	switch m.mode {
+	case modeCommandPalette:
+		return modalBoxStyle.Width(bw).Render(m.renderPaletteBody(bw, bh)), true
+	case modeHelp:
+		return modalBoxStyle.Width(bw).Render(m.renderHelpBody(bw, bh)), true
+	default:
+		return "", false
+	}
+}
+
 // View renders the whole screen. In bubbletea v2 the alt-screen and mouse modes
 // are declared on the returned View (they are no longer program options), so
 // every return path sets them — including the early "loading…" frame, otherwise
@@ -261,7 +311,7 @@ func (m model) View() tea.View {
 
 			preview := lipgloss.NewStyle().
 				Width(g.leftInner).Height(g.bottomInner).
-				Render(m.renderPreviewRegion(g.leftInner, g.bottomInner))
+				Render(m.renderPreview(g.leftInner))
 
 			body = lipgloss.JoinVertical(lipgloss.Left, list, divider, preview)
 		} else {
@@ -273,7 +323,7 @@ func (m model) View() tea.View {
 
 			right := lipgloss.NewStyle().
 				Width(g.rightInner).Height(g.bodyH).
-				Render(m.renderPreviewRegion(g.rightInner, g.bodyH))
+				Render(m.renderPreview(g.rightInner))
 
 			// Divider column: bodyH copies of the 3-col strip. The middle glyph stays
 			// colDim; the pad col hugging the focused pane carries a half-block accent
@@ -293,6 +343,11 @@ func (m model) View() tea.View {
 			body = lipgloss.JoinHorizontal(lipgloss.Top, left, divider, right)
 		}
 		content = strings.Join([]string{body, m.renderStatus()}, "\n")
+
+		// Floating modal overlay (palette / help) drawn OVER the screen.
+		if box, ok := m.renderModal(); ok {
+			content = overlayCentered(content, box, m.width, m.height)
+		}
 	}
 
 	v := tea.NewView(content)
@@ -680,26 +735,13 @@ func (m model) renderStatus() string {
 		}
 		return p
 	case modeCommandPalette:
-		// Stage 0 is a generic filter prompt "> query▏"; stage 1 prefixes the
-		// chosen command so the user sees what they are arging ("cd > path▏").
-		var prompt string
-		if m.paletteStage == 0 {
-			prompt = promptStyle.Background(colAccent).Foreground(colSelFg).
-				Render("> " + m.paletteQuery + "▏")
-		} else {
-			sel := m.paletteFiltered[m.paletteCursor]
-			prompt = promptStyle.Background(colAccent).Foreground(colSelFg).
-				Render(sel.Name + " > " + m.paletteSecondaryInput + "▏")
-		}
-		if m.statusMsg != "" {
-			return prompt + " " + dimStyle.Render(m.statusMsg)
-		}
-		return prompt
+		// The prompt + command list + any submit error (cd jail-block) live in
+		// the modal box now; the status bar just carries the modal short-help.
+		return statusBarStyle.Width(m.width).Render(fitWidth(
+			"[enter] run   [esc] close   "+dimStyle.Render("[↑↓] move"), m.width-2))
 	case modeHelp:
 		return statusBarStyle.Width(m.width).Render(fitWidth(
-			"press ? or esc to close   "+dimStyle.Render("j/k scroll"),
-			m.width-2,
-		))
+			"[j/k] scroll   [esc] close", m.width-2))
 	default:
 		// Focus is signalled by the divider glow (renderList/View draw it toward
 		// m.focusPane) plus the dimmed cursor row — not by a status-bar chip — so
@@ -727,40 +769,43 @@ func (m model) renderStatus() string {
 	}
 }
 
-// renderPreviewRegion renders whatever occupies the preview pane area for the
-// current mode: the command palette, the help overlay, or the file/folder
-// preview. The palette and help take over the preview region rather than
-// floating in a dialog — there is no dialog stack to manage (D9/D10).
-func (m model) renderPreviewRegion(w, h int) string {
-	switch m.mode {
-	case modeCommandPalette:
-		return m.renderPalette(w, h)
-	case modeHelp:
-		return m.renderHelp(w, h)
-	default:
-		return m.renderPreview(w)
-	}
-}
+// renderPaletteBody draws the modal box content: the search/arg prompt at the
+// box top (Raycast-style — the prompt lives in the box, not the status bar),
+// then the filtered command list. In the cd arg stage the body shows the
+// command description plus any submit error (e.g. a jail-block) next to the
+// input the user is correcting.
+func (m model) renderPaletteBody(w, h int) string {
+	var lines []string
 
-// renderPalette draws the command list (stage 0). In stage 1 (arg input) the
-// prompt itself lives in the status bar, so the pane shows the chosen command's
-// description for context. The cursor row carries the full-width accent
-// highlight — the same cursor marker the list pane uses (no caret glyph).
-func (m model) renderPalette(w, h int) string {
+	// Row 0: search prompt (stage 0) or cd-arg prompt (stage 1).
+	if m.paletteStage == 0 {
+		lines = append(lines, promptStyle.Background(colAccent).Foreground(colSelFg).
+			Render(fitWidth("> "+m.paletteQuery+"▏", w)))
+	} else {
+		sel := m.paletteFiltered[m.paletteCursor]
+		lines = append(lines, promptStyle.Background(colAccent).Foreground(colSelFg).
+			Render(fitWidth(sel.Name+" > "+m.paletteSecondaryInput+"▏", w)))
+	}
+	lines = append(lines, "") // blank between prompt and body
+
+	// Stage 1: description + any submit error, both inside the box.
 	if m.paletteStage == 1 {
 		sel := m.paletteFiltered[m.paletteCursor]
-		return strings.Join([]string{
-			dimStyle.Render("> " + sel.Name + ":"),
-			"",
-			fitWidth(sel.Description, w),
-		}, "\n")
+		lines = append(lines, dimStyle.Render(fitWidth(sel.Description, w)))
+		if m.statusMsg != "" {
+			lines = append(lines, "", dimStyle.Render(fitWidth(m.statusMsg, w)))
+		}
+		return strings.Join(lines, "\n")
 	}
+
+	// Stage 0: filtered command rows; cursor row = full-width accent.
 	if len(m.paletteFiltered) == 0 {
-		return dimStyle.Render(fitWidth("(no matching commands)", w))
+		lines = append(lines, dimStyle.Render(fitWidth("(no matching commands)", w)))
+		return strings.Join(lines, "\n")
 	}
-	var lines []string
+	bodyRows := h - len(lines) // rows left under the prompt + blank
 	for i, c := range m.paletteFiltered {
-		if i >= h {
+		if i >= bodyRows {
 			break
 		}
 		row := c.Name + "  — " + c.Description
@@ -773,10 +818,10 @@ func (m model) renderPalette(w, h int) string {
 	return strings.Join(lines, "\n")
 }
 
-// renderHelp draws the full-help overlay: bindings grouped under titles, scrolled
-// by helpTop. The group order matches fullHelp; helpLineCount counts the same
-// lines so the scroll clamp never overshoots.
-func (m model) renderHelp(w, h int) string {
+// renderHelpBody draws the full-help body for the modal: bindings grouped under
+// titles, scrolled by helpTop. The group order matches fullHelp; helpLineCount
+// counts the same lines so the scroll clamp never overshoots.
+func (m model) renderHelpBody(w, h int) string {
 	titles := []string{"Navigation", "Preview", "Mutation", "Modes", "Misc"}
 	var lines []string
 	for gi, group := range m.fullHelp() {

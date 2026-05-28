@@ -19,6 +19,9 @@ dist/
 # Local OMC ledger archive — kept on disk for history but never committed.
 .omc/
 
+# Cloudflare Wrangler local cache/state from `wrangler pages` deploys (landing page).
+.wrangler/
+
 # User-local Claude Code config (skills, settings) — lives on the developer's machine,
 # not in the public repo. AGENTS.md (GitNexus index, project-relevant) is committed.
 .claude/
