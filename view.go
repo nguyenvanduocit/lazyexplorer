@@ -226,6 +226,23 @@ func (m model) modalSize() (innerW, innerH int) {
 	return max(1, outerW-fw), max(1, outerH-fh)
 }
 
+// overlayCentered draws box centered over bg (a full w×h rendered screen) and
+// returns the composited string. The box is centered within the body region
+// (rows [0, h-1)) so the status row at h-1 — which carries the modal hints —
+// stays visible. Background shows through everywhere the box does not cover
+// (D21/D22 — no dim): the bg layer at z=0 paints every cell, the box layer at
+// z=1 only the cells it occupies.
+func overlayCentered(bg, box string, w, h int) string {
+	boxW, boxH := lipgloss.Width(box), lipgloss.Height(box)
+	cx := max(0, (w-boxW)/2)
+	cy := max(0, ((h-1)-boxH)/2)
+	canvas := lipgloss.NewCanvas(w, h)
+	return canvas.Compose(lipgloss.NewCompositor(
+		lipgloss.NewLayer(bg).Z(0),
+		lipgloss.NewLayer(box).X(cx).Y(cy).Z(1),
+	)).Render()
+}
+
 // View renders the whole screen. In bubbletea v2 the alt-screen and mouse modes
 // are declared on the returned View (they are no longer program options), so
 // every return path sets them — including the early "loading…" frame, otherwise

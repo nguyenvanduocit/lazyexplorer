@@ -63,3 +63,53 @@ func TestModalSizeClamps(t *testing.T) {
 		}
 	}
 }
+
+func TestOverlayCenteredComposites(t *testing.T) {
+	w, h := 40, 12
+	// Background: h rows of styled (ANSI) content, padded to full width.
+	rowStyle := lipgloss.NewStyle().Background(lipgloss.Color("#333333")).Foreground(colFg)
+	var rows []string
+	for i := 0; i < h; i++ {
+		rows = append(rows, rowStyle.Width(w).Render("bgrow"))
+	}
+	bg := strings.Join(rows, "\n")
+	box := modalBoxStyle.Width(20).Render("hello\nworld")
+
+	out := overlayCentered(bg, box, w, h)
+	lines := strings.Split(out, "\n")
+
+	if len(lines) != h {
+		t.Fatalf("rows = %d, want %d", len(lines), h)
+	}
+	for i, ln := range lines {
+		if lipgloss.Width(ln) != w {
+			t.Errorf("row %d width = %d, want %d", i, lipgloss.Width(ln), w)
+		}
+	}
+	// Top row (above the centered box) keeps background content.
+	if !strings.Contains(stripANSI(lines[0]), "bgrow") {
+		t.Errorf("row 0 lost background: %q", stripANSI(lines[0]))
+	}
+	// Some middle row carries the rounded border (the box landed on screen).
+	joined := stripANSI(out)
+	if !strings.Contains(joined, "╭") || !strings.Contains(joined, "╯") {
+		t.Errorf("composited output missing box border")
+	}
+}
+
+// stripANSI removes SGR escapes for plain-text assertions.
+func stripANSI(s string) string {
+	var b strings.Builder
+	esc := false
+	for _, r := range s {
+		switch {
+		case r == '\x1b':
+			esc = true
+		case esc && r == 'm':
+			esc = false
+		case !esc:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
