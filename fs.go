@@ -9,6 +9,7 @@ import (
 	_ "image/gif"  // register GIF decoder for image.DecodeConfig
 	_ "image/jpeg" // register JPEG decoder
 	_ "image/png"  // register PNG decoder
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -23,6 +24,8 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/nguyenvanduocit/glamour/v2"
 	glamourstyles "github.com/nguyenvanduocit/glamour/v2/styles"
+	gitignore "github.com/sabhiram/go-gitignore"
+	"github.com/sahilm/fuzzy"
 )
 
 // entry is one item shown in the left panel.
@@ -94,6 +97,128 @@ func withinRoot(root, target string) bool {
 		return false
 	}
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+const (
+	// maxWalkEntries caps walkTree defensively (PRD FR14). A project past this
+	// size is well outside the vibe-code companion scope; capping keeps the walk
+	// and the subsequent fuzzy filter sub-second instead of letting a pathological
+	// tree (a node_modules someone forgot to .gitignore) balloon memory.
+	maxWalkEntries = 100_000
+
+	// maxSearchResults is how many filtered matches the list pane shows at once
+	// (PRD D11). Past this the result is a scroll-fest, not a glance — the user
+	// types another character to refine instead. 500 renders sub-millisecond.
+	maxSearchResults = 500
+)
+
+// walkTree walks root recursively into a flat []entry whose names are relative
+// to root (e.g. "docs/prd-search.md"), the source the fuzzy filter ranks over.
+// It is the project-wide-search counterpart to readDir's single-directory listing.
+//
+// Exclusions (PRD §5.3, FR3, D7):
+//   - .git/ is skipped unconditionally — even when the project's .gitignore does
+//     not mention it (ripgrep-default; nobody wants object hashes in results).
+//   - the root .gitignore is honored. A directory match is tested against both
+//     rel and rel+"/" because a trailing-slash pattern ("node_modules/") matches
+//     the dir's contents but NOT the bare dir name — testing rel+"/" lets us
+//     SkipDir the whole subtree instead of descending and filtering file-by-file.
+//   - symlinks are neither followed nor included: following risks an infinite
+//     loop and, worse, leaking entries from outside the jail root.
+//
+// Resilience (FR13, FR14): a permission error on a sub-directory skips that
+// subtree (fs.SkipDir) rather than aborting the walk; the entry count is capped
+// at maxWalkEntries (fs.SkipAll). The result is sorted alpha by relPath so an
+// empty query (FR4) shows a stable, predictable listing. The root itself is
+// never emitted. ignore is nil when the project has no .gitignore — then only
+// the hardcoded .git/ skip applies, which is a sane default.
+func walkTree(root string) ([]entry, error) {
+	// A missing or unparseable .gitignore degrades to ignore == nil — the walk
+	// continues with only the hardcoded .git/ skip (FR13: never fail the walk
+	// over a bad ignore file). The parse error is discarded rather than surfaced:
+	// it is rare and recoverable, and the search status bar is already carrying
+	// the prompt + indexing/0-results chips. The user-visible symptom of a missing
+	// ignore is "too many results", which they refine away by typing.
+	ignore, _ := gitignore.CompileIgnoreFile(filepath.Join(root, ".gitignore"))
+
+	out := make([]entry, 0, 256)
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			// A read/permission error on a directory → skip its subtree and keep
+			// going; on a file → just skip it. Never bubble the error up (FR13).
+			if d != nil && d.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if path == root {
+			return nil // never emit the root itself
+		}
+		if d.IsDir() && d.Name() == ".git" {
+			return fs.SkipDir // D7: always skip .git/, regardless of .gitignore
+		}
+		// Skip symlinks without following them (FR3): no loops, no jail leak.
+		if d.Type()&fs.ModeSymlink != 0 {
+			return nil
+		}
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			return nil
+		}
+		if ignore != nil {
+			if d.IsDir() {
+				// A dir matches a trailing-slash pattern only WITH the slash, and a
+				// bare-name pattern WITHOUT it — test both so either pattern shape
+				// prunes the whole subtree.
+				if ignore.MatchesPath(rel) || ignore.MatchesPath(rel+"/") {
+					return fs.SkipDir
+				}
+			} else if ignore.MatchesPath(rel) {
+				return nil
+			}
+		}
+		e := entry{name: rel, isDir: d.IsDir()}
+		if info, infoErr := d.Info(); infoErr == nil {
+			e.size = info.Size()
+			e.modTime = info.ModTime()
+		}
+		out = append(out, e)
+		if len(out) >= maxWalkEntries {
+			return fs.SkipAll // FR14: defensive cap on pathologically large trees
+		}
+		return nil
+	})
+	sort.Slice(out, func(i, j int) bool { return out[i].name < out[j].name })
+	return out, err
+}
+
+// filterSearch returns up to `limit` entries matching query, fuzzy-ranked by
+// score descending (PRD §5.4, FR4/FR5). An empty query returns the first `limit`
+// entries unchanged — walkTree already alpha-sorted them, so this is the
+// "browse everything" view. A non-empty query runs sahilm/fuzzy (case-
+// insensitive, D5) over the entry names and maps each match back to its entry
+// via Match.Index. The fuzzy result is already score-sorted, so the slice keeps
+// the closest match on top.
+func filterSearch(entries []entry, query string, limit int) []entry {
+	if query == "" {
+		if len(entries) > limit {
+			return entries[:limit]
+		}
+		return entries
+	}
+	names := make([]string, len(entries))
+	for i, e := range entries {
+		names[i] = e.name
+	}
+	matches := fuzzy.Find(query, names)
+	if len(matches) > limit {
+		matches = matches[:limit]
+	}
+	out := make([]entry, 0, len(matches))
+	for _, mt := range matches {
+		out = append(out, entries[mt.Index])
+	}
+	return out
 }
 
 const (
