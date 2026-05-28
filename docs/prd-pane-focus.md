@@ -827,4 +827,4 @@ Feature: Pane focus state for keyboard-driven scroll
 | `focus_test.go` *(mới)* | Tests T9 (focus-specific) |
 | `entryrow_test.go`, `preview_dir_test.go` | Cập nhật call sites `renderEntryRow` cho chữ ký 4-tham số |
 | `docs/prd-pane-focus.md` | File này |
-| `docs/prd-smooth-preview-scroll.md` | + một dòng §1 ghi D2 (fine 1-dòng) + D3 (ctrl+d/u half-page) đã ship qua PRD này (trên `j/k`+focus thay vì `J/K`); status giữ `draft` vì D1 (wheel ±1) + D5 (const) chưa ship |
+| `docs/prd-smooth-preview-scroll.md` | + một dòng §1 ghi D2 (fine 1-dòng) + D3 (ctrl+d/u half-page) đã ship qua PRD này (trên `j/k`+focus thay vì `J/K`) |

@@ -1,6 +1,6 @@
 # PRD — Flag `--split`: respawn vào split pane theo terminal
 
-Status: **accepted** · Author: opus 4.7 session · Ngày: 2026-05-28
+Status: **accepted** · Author: opus 4.7 session · Ngày: 2026-05-28 · Shipped: 2026-05-28 (✅ `go build -o lazyexplorer . && go vet ./... && go test ./...` green)
 
 ---
 

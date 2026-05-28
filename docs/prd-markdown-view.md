@@ -5,7 +5,7 @@
 > dump plain text — giống component render markdown của
 > [`charmbracelet/glow`](https://github.com/charmbracelet/glow).
 
-Status: **accepted** · Author: feature-dev session · Ngày: 2026-05-27
+Status: **accepted** · Author: feature-dev session · Ngày: 2026-05-27 · Shipped: 2026-05-28 (✅ `go build -o lazyexplorer . && go vet ./... && go test ./...` green)
 
 ---
 

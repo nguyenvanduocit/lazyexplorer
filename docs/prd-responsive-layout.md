@@ -463,9 +463,8 @@ func (m *model) setTopFromY(y int) {
 ```
 
 Ratio storage (thay vì row tuyệt đối) giữ split proportional khi terminal resize
-height — đúng kỷ luật của `setLeftFromX` cho trục X. Formula `y / bodyH` (không
-`(y+1)/bodyH` của PRD draft cũ) khớp với choice `dividerHeight=1` + glyph row Ở
-row `dividerYStart` (D9).
+height — đúng kỷ luật của `setLeftFromX` cho trục X. Formula `y / bodyH` khớp với
+choice `dividerHeight=1` + glyph row Ở row `dividerYStart` (D9).
 
 ### 5.10 `previewClick` (`model.go:602-640`) + `previewScroll` (`view.go:271-275`)
 

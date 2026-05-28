@@ -6,7 +6,7 @@
 > dùng [`chroma`](https://github.com/alecthomas/chroma), engine highlight mà
 > `glamour`/`glow`/`crush` đều dùng.
 
-Status: **accepted** · Author: feature-dev session · Ngày: 2026-05-27
+Status: **accepted** · Author: feature-dev session · Ngày: 2026-05-27 · Shipped: 2026-05-28 (✅ `go build -o lazyexplorer . && go vet ./... && go test ./...` green)
 
 ---
 

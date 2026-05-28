@@ -13,22 +13,6 @@ Status: **accepted** · Author: feature-dev session · Reviewer: critic (indepen
 
 ---
 
-> **Baseline note (đọc trước khi implement).** PRD này viết trên snapshot
-> *pre-integration*; baseline thực tế là nhánh **`trial-integration`** đã
-> **integrated + committed**: `9859fc1 feat(search)` (`/` + `modeSearch`),
-> `4b18fa9 feat(focus)` (focusPane), `e188683 test(integration)`.
-> `prd-smooth-preview-scroll.md` cũng đã reconcile trong đó. Hệ quả với reader:
-> - **Symbol là anchor ổn định, KHÔNG phải số dòng.** Mọi `model.go:NNN` trong thân
->   doc phản ánh snapshot cũ và bị *superseded* bởi anchor symbol dưới đây — implementer
->   **re-pin** theo cây đã commit. Vị trí post-integration (2026-05-28, sau e188683):
->   `updateNormal` ~L871, mode enum `modeNormal..modeSearch` L49-52, `focusPane` enum
->   L88-92, focus-aware dispatch trong updateNormal L879-944, `case "/"` →
->   `enterSearch()` L948, `newModel` ~L175.
-> - **search + pane-focus ĐÃ tồn tại.** PRD này refactor `switch msg.String()` (vẫn
->   đang dùng) sang `key.Matches`, **giữ nguyên** các nhánh `if m.focusPane == focusList`
->   có sẵn (L879-944) và migrate `case "/"` → `case key.Matches(msg, km.Search)`. Không
->   "đăng ký chỗ trống chờ PRD khác" nữa — chúng là code thật.
-
 ## 1. Bối cảnh & vấn đề
 
 Keybind dispatch hiện tại sống ở **một switch nội tuyến** trong `updateNormal`

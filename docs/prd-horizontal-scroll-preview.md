@@ -25,23 +25,6 @@ Status: **accepted** · Author: feature-dev session · Reviewer: critic (indepen
 
 ---
 
-> **Baseline note (đọc trước khi implement).** Nhánh **`trial-integration`** đã
-> **integrated + committed**: `9859fc1 feat(search)` (modeSearch), `4b18fa9 feat(focus)`
-> (focusPane), `e188683 test(integration)`, và `prd-smooth-preview-scroll.md` reconcile.
-> Hệ quả:
-> - **Phụ thuộc cứng — ship order.** PRD này cần **KeyMap registry** từ
->   `prd-keymap-and-command-palette.md` — PRD đó *accepted nhưng CHƯA implement* →
->   PRD này ship **sau** nó. `focusPane` (pane-focus) thì đã landed (commit 4b18fa9),
->   nên dispatch `if m.focusPane == focusList/Preview` đã có sẵn để mở rộng.
-> - **Symbol là anchor ổn định**, không phải số dòng — mọi `model.go:NNN`/`view.go:NNN`
->   là snapshot cũ, re-pin theo cây đã commit. `view.go`/`fs.go` citations
->   (`view.go:444-472` renderPreview, `fs.go:340` ansi.Truncate, `fs.go:430` glamour
->   wrap) đã verify chính xác trên stable files; `model.go` re-pin (`updateNormal`
->   ~L871, focus dispatch L879-944).
-> - **ANSI API đã VERIFIED tồn tại** (critic pass): `ansi.TruncateLeft(s, n, prefix)`,
->   `ansi.Hardwrap(s, limit, preserveSpace)`, `ansi.StringWidth(s)` đều có trong
->   `x/ansi v0.11.7`. T1 BLOCKER coi như resolved — vẫn giữ contract test để đóng đinh.
-> - Dispatch của `h`/`l` mở rộng case `GoUp`/`OpenEntry` có sẵn (xem §5.6 B1).
 ## 1. Bối cảnh & vấn đề
 
 Preview pane render qua `renderPreview` (`view.go:444-472`). Mỗi dòng nội dung
@@ -101,17 +84,16 @@ Vim có hai chiến lược cho dòng dài, toggle bằng `:set wrap` / `:set no
 
 PRD này **xây trên** (consume, không re-implement):
 
-- **`prd-pane-focus.md`** (draft) — định nghĩa `focusPane` (list | preview).
+- **`prd-pane-focus.md`** — định nghĩa `focusPane` (list | preview).
   Horizontal scroll keys chỉ active khi `focusPane == focusPreview`. Quan trọng:
   pane-focus FR5 đã cho `h`/`left`/`backspace` thành **no-op khi focusPreview**
   (chúng là list-navigation, không có nghĩa khi đọc preview) → `h`/`l` **trống**
   ở preview focus để PRD này dùng. Đây là tiền đề.
-- **`prd-keymap-and-command-palette.md`** (draft) — `KeyMap` registry. PRD này
-  thêm binding mới vào registry (xem §5.6). Nếu keymap PRD ship trước, thêm field;
-  nếu PRD này ship trước, dùng inline `switch` tạm rồi keymap PRD hấp thụ sau.
+- **`prd-keymap-and-command-palette.md`** — `KeyMap` registry. PRD này
+  thêm binding mới vào registry (xem §5.6).
 
-> Cả ba PRD orthogonal về goal, nhưng PRD này **ưu tiên ship sau** hai PRD kia
-> vì nó consume `focusPane` + `KeyMap`. Resolution rules §5.6.
+> Cả ba PRD orthogonal về goal; PRD này consume `focusPane` + `KeyMap`.
+> Resolution rules §5.6.
 
 ## 2. Goal (1 câu)
 
