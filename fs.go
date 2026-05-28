@@ -390,9 +390,22 @@ func renderImagePreview(path string, _ []byte, _ int, _ string) ([]string, bool,
 // palette by name; an empty/unknown name falls back to the plain "notty" style
 // so non-program callers (tests, pipes) stay deterministic.
 //
-// The resolved config is copied by value before mutation, then RowBorder is
-// enabled so tables render a divider between every row (and not just under the
-// header). Copying keeps glamour's package-level style config untouched.
+// The resolved config is copied by value before mutation, then tweaked so the
+// rendered output reads as tight as the code preview (chroma emits flush-left
+// content with no inter-block blank rows). Copying keeps glamour's
+// package-level style config untouched.
+//
+// Spacing tweaks vs the upstream DarkStyleConfig:
+//   - Document.BlockPrefix / BlockSuffix → "" so the document doesn't add a
+//     leading or trailing blank row inside the preview pane.
+//   - Heading.BlockSuffix → "" so a heading butts straight against the next
+//     block instead of leaving a blank row below it.
+//   - Document.Margin → 0 so content starts at col 0 of the preview pane,
+//     matching chroma's flush-left code rendering (the two preview modes look
+//     equally dense beside each other).
+//
+// RowBorder is enabled so tables render a divider between every row (and not
+// just under the header).
 func renderMarkdown(raw string, width int, style string) ([]string, error) {
 	if style == "" {
 		style = glamourstyles.NoTTYStyle
@@ -404,6 +417,13 @@ func renderMarkdown(raw string, width int, style string) ([]string, error) {
 	styleCfg := *cfg
 	rowBorder := true
 	styleCfg.Table.RowBorder = &rowBorder
+
+	// Tighten vertical and horizontal spacing so markdown reads as tight as code.
+	styleCfg.Document.BlockPrefix = ""
+	styleCfg.Document.BlockSuffix = ""
+	styleCfg.Heading.BlockSuffix = ""
+	zero := uint(0)
+	styleCfg.Document.Margin = &zero
 
 	r, err := glamour.NewTermRenderer(
 		glamour.WithStyles(styleCfg),
