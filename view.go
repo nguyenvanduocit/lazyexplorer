@@ -243,6 +243,23 @@ func overlayCentered(bg, box string, w, h int) string {
 	)).Render()
 }
 
+// renderModal returns the styled, bordered box for the active overlay mode and
+// ok=true; in normal mode it returns ok=false (no overlay). modalSize hands the
+// body its inner dimensions; modalBoxStyle adds the border + padding frame.
+// .Width(bw) pins the box to the clamped inner width so short content does not
+// produce a too-narrow box and the border stays rectangular.
+func (m model) renderModal() (string, bool) {
+	bw, bh := m.modalSize()
+	switch m.mode {
+	case modeCommandPalette:
+		return modalBoxStyle.Width(bw).Render(m.renderPaletteBody(bw, bh)), true
+	case modeHelp:
+		return modalBoxStyle.Width(bw).Render(m.renderHelpBody(bw, bh)), true
+	default:
+		return "", false
+	}
+}
+
 // View renders the whole screen. In bubbletea v2 the alt-screen and mouse modes
 // are declared on the returned View (they are no longer program options), so
 // every return path sets them — including the early "loading…" frame, otherwise

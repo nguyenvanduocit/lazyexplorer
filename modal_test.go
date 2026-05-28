@@ -126,6 +126,33 @@ func TestPaletteBodyCdErrorInBox(t *testing.T) {
 	}
 }
 
+func TestRenderModal(t *testing.T) {
+	// Normal mode → no modal.
+	if _, ok := (model{mode: modeNormal, width: 100, height: 30}).renderModal(); ok {
+		t.Errorf("normal mode should not produce a modal")
+	}
+	// Palette mode → bordered box.
+	m := model{
+		mode: modeCommandPalette, width: 100, height: 30,
+		paletteFiltered: defaultCommands(),
+	}
+	box, ok := m.renderModal()
+	if !ok {
+		t.Fatal("palette mode should produce a modal")
+	}
+	if !strings.Contains(stripANSI(box), "╭") {
+		t.Errorf("modal missing border: %q", stripANSI(box))
+	}
+	// Box must fit the screen width.
+	if lipgloss.Width(box) > m.width {
+		t.Errorf("box width %d exceeds screen %d", lipgloss.Width(box), m.width)
+	}
+	// Help mode → modal too.
+	if _, ok := (model{mode: modeHelp, width: 100, height: 30, keymap: defaultKeyMap()}).renderModal(); !ok {
+		t.Errorf("help mode should produce a modal")
+	}
+}
+
 // indexOfCmd returns the position of the named command in cmds (test helper).
 func indexOfCmd(cmds []Command, name string) int {
 	for i, c := range cmds {
