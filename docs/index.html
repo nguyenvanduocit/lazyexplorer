@@ -277,7 +277,7 @@
     <p class="lede rise" style="animation-delay:.26s">
       lazyexplorer is a deliberately small terminal explorer that sits in the pane beside your
       agent — just the tree and a preview. <span class="hl">Nothing to configure</span>, no panels
-      to arrange, nothing competing for your attention. It refreshes on its own, so you can forget it's there.
+      to arrange, nothing competing for your attention — small enough to forget it's even open.
     </p>
 
     <div class="cmd rise" style="animation-delay:.34s">
@@ -302,10 +302,9 @@
         </video>
       </div>
       <figcaption>
-        <span class="cmt">// fig.1</span> — the two-pane view, recorded live. Left: the project tree, jailed to its
-        root. Right: the selection, rendered (here <b>README.md</b>, through glamour). An agent
-        writes <b>auth_handler.go</b> and then its test — both land in the list on their own,
-        while the cursor never leaves README.md, matched by name, not by position.
+        <span class="cmt">// fig.1</span> — the whole interface: the project tree on the left, a rendered preview
+        of whatever's selected on the right (here <b>README.md</b>, through glamour). Two panes,
+        nothing else to arrange or learn.
       </figcaption>
     </figure>
    </div>
@@ -323,9 +322,8 @@
       </p>
       <p class="run">
         lazyexplorer goes the other way: one small pane with the tree and a rendered preview, and
-        nothing else to arrange or learn. It refreshes on its own, so you never stop to poke at it —
-        glance, see what changed, get back to the agent. Small on purpose, so it stays out of the
-        way instead of becoming one more thing to manage.
+        nothing else to arrange or learn. Glance, see where things stand, get back to the agent.
+        Small on purpose, so it stays out of the way instead of becoming one more thing to manage.
       </p>
     </div>
   </section>
@@ -335,19 +333,7 @@
     <div class="idx reveal"><span class="n">02</span><span class="lbl">what it does</span></div>
     <div class="entries">
       <article class="entry reveal">
-        <h3><span class="no">01</span>Live refresh</h3>
-        <p>
-          Polls the project once a second and rebuilds only when the bytes actually change. The
-          moment your agent adds, edits, or deletes a file, it shows up — no keypress. Your cursor
-          stays on the file you were reading, matched by <span class="hl">name</span>, not by position; delete the
-          folder you're standing in and it climbs to the nearest surviving parent instead of breaking.
-        </p>
-        <div class="demo"><span class="ink">+ auth_handler.go</span>   ← appears, cursor stays put
-<span class="ink">+ auth_handler_test.go</span>   ← and its test, a beat later</div>
-      </article>
-
-      <article class="entry reveal">
-        <h3><span class="no">02</span>Previews that read well</h3>
+        <h3><span class="no">01</span>Previews that read well</h3>
         <p>
           Markdown is rendered through <span class="mono-inline">glamour</span> — headings, lists, tables,
           inline code. Source is syntax-highlighted through <span class="mono-inline">chroma</span>.
@@ -368,7 +354,7 @@
       </article>
 
       <article class="entry reveal">
-        <h3><span class="no">03</span>Find <span class="hl">&amp;</span> act fast</h3>
+        <h3><span class="no">02</span>Find <span class="hl">&amp;</span> act fast</h3>
         <p>
           Press <span class="mono-inline">/</span> to fuzzy-find any file in the tree, however deep, and
           jump straight to it. Press <span class="mono-inline">ctrl+p</span> for the command palette —
@@ -390,7 +376,7 @@
       </article>
 
       <article class="entry reveal">
-        <h3><span class="no">04</span>Lives in the pane beside your agent</h3>
+        <h3><span class="no">03</span>Lives in the pane beside your agent</h3>
         <p>
           Run it with <span class="mono-inline">--split</span> and it opens a pane right next to the one
           you're in — <span class="mono-inline">tmux</span>, <span class="mono-inline">zellij</span>, WezTerm,
