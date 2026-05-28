@@ -115,7 +115,7 @@ func TestRenderPreviewFolderUsesRenderEntryRow(t *testing.T) {
 			len(lines), len(m.previewEntries), out)
 	}
 	for i, e := range m.previewEntries {
-		want := renderEntryRow(e, w, false)
+		want := renderEntryRow(e, w, false, false)
 		if lines[i] != want {
 			t.Errorf("preview line %d not byte-equal to renderEntryRow:\n got:  %q\n want: %q",
 				i, lines[i], want)
@@ -218,7 +218,7 @@ func TestRenderPreviewFolderScrollsConsistently(t *testing.T) {
 	w := m.previewBodyWidth()
 	out := m.renderPreview(w)
 	firstLine := strings.SplitN(out, "\n", 2)[0]
-	want := renderEntryRow(m.previewEntries[10], w, false)
+	want := renderEntryRow(m.previewEntries[10], w, false, false)
 	if firstLine != want {
 		t.Errorf("first visible line after scrollPreview(10) does not match entries[10]:\n got:  %q\n want: %q",
 			firstLine, want)

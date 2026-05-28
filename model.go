@@ -79,6 +79,19 @@ func walkTreeCmd(root string, gen uint64) tea.Cmd {
 	}
 }
 
+// focusPane is which of the two panes keyboard navigation acts on. It is a
+// sub-state of modeNormal — orthogonal to mode (which owns the rename/delete
+// prompts) — so the "scroll-ish" keys (up/down/j/k/g/G/ctrl+d/u) and a
+// left-click can route to either pane while the mode machinery stays untouched.
+// Zero value = focusList, so a freshly-built model starts on the list (D2): the
+// user picks a file there, the preview follows.
+type focusPane int
+
+const (
+	focusList focusPane = iota // zero value — default on launch
+	focusPreview
+)
+
 type model struct {
 	root string // jail root — cwd may equal or descend from this, never above
 	cwd  string
@@ -119,7 +132,8 @@ type model struct {
 	pendingWidth int
 
 	mode      mode
-	input     string // buffer for rename
+	focusPane focusPane // sub-state of modeNormal; orthogonal to mode prompts (D1)
+	input     string    // buffer for rename
 	statusMsg string
 
 	leftRatio float64 // left panel width as a fraction of total (2-col mode); drag-adjustable along X
@@ -706,7 +720,8 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 		// Left-click on the divider that wasn't a drag-start (status row, or
 		// future per-pane modes) is a noop — divider is a "no-pane" zone and
-		// must never route to list or preview (FR7).
+		// must never route to list or preview (FR7). It also must not change
+		// focus, so this returns before the focus-set below.
 		if overDivider {
 			return m, nil
 		}
@@ -717,6 +732,18 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			listH = g.topInner
 		} else {
 			overList = e.X < g.dividerStart
+		}
+		// A committed left-click sets focus to the pane it landed in (FR8), in
+		// sync with the wheel's mental model: the pane you just interacted with
+		// is the pane keyboard navigation now acts on. Set it here — after the
+		// divider/non-left early-returns, so a no-pane click never flips focus —
+		// and before routing the click into the pane's own handling. overList is
+		// axis-aware (X split in 2-col, Y split in 1-col stacked), so focus
+		// follows the click correctly in either orientation.
+		if overList {
+			m.focusPane = focusList
+		} else {
+			m.focusPane = focusPreview
 		}
 		if !overList {
 			m.previewClick(e.Y, g) // click a name in a folder listing → open + select it
@@ -764,6 +791,23 @@ func (m *model) setTopFromY(y int) {
 		return
 	}
 	m.topRatio = float64(y) / float64(bodyH)
+}
+
+// moveCursor nudges the list cursor by delta rows and refreshes the preview.
+// Clamps to [0, len(entries)-1]; a delta that overshoots either end snaps to
+// the edge. Empty list → noop. Centralizing the move keeps updateNormal flat —
+// j/k, ctrl+d/u (list half-page), and any future "page list" key call this and
+// inherit the same clamping + preview refresh.
+func (m *model) moveCursor(delta int) {
+	if len(m.entries) == 0 {
+		return
+	}
+	target := min(max(0, m.cursor+delta), len(m.entries)-1)
+	if target == m.cursor {
+		return
+	}
+	m.cursor = target
+	m.refreshPreview()
 }
 
 // scrollPreview moves the right-panel viewport by delta lines, clamped to
@@ -829,50 +873,102 @@ func (m model) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "q", "ctrl+c":
 		return m, tea.Quit
 
+	// Tab toggles which pane the navigation keys act on (D3). Two panes →
+	// forward == backward, so one key is enough; there is no shift+tab.
+	case "tab":
+		if m.focusPane == focusList {
+			m.focusPane = focusPreview
+		} else {
+			m.focusPane = focusList
+		}
+
+	// "Scroll-ish" keys route to the focused pane (D4). On the list they move
+	// the cursor; on the preview they scroll the viewport — the same mental
+	// model the mouse wheel already uses.
 	case "down", "j":
-		if m.cursor < len(m.entries)-1 {
-			m.cursor++
-			m.refreshPreview()
+		if m.focusPane == focusList {
+			m.moveCursor(1)
+		} else {
+			m.scrollPreview(1)
 		}
 	case "up", "k":
-		if m.cursor > 0 {
-			m.cursor--
-			m.refreshPreview()
+		if m.focusPane == focusList {
+			m.moveCursor(-1)
+		} else {
+			m.scrollPreview(-1)
 		}
 	case "g":
-		m.cursor = 0
-		m.refreshPreview()
+		if m.focusPane == focusList {
+			m.moveCursor(-len(m.entries)) // overshoots → clamps to index 0
+		} else {
+			m.previewTop = 0
+		}
 	case "G":
-		m.cursor = max(0, len(m.entries)-1)
-		m.refreshPreview()
+		if m.focusPane == focusList {
+			m.moveCursor(len(m.entries)) // overshoots → clamps to last index
+		} else {
+			_, bodyH := m.previewScroll()
+			m.previewTop = max(0, m.previewLen()-bodyH)
+		}
 
+	// ctrl+d/u is the coarse "half-page" tier (D11). Step is half the preview
+	// body, recomputed each press so it tracks resizes/divider drags (min 1 so a
+	// 1-row body still moves). It half-pages the cursor when the list is focused,
+	// the preview viewport when the preview is focused.
+	case "ctrl+d":
+		_, bodyH := m.previewScroll()
+		step := max(1, bodyH/2)
+		if m.focusPane == focusList {
+			m.moveCursor(step)
+		} else {
+			m.scrollPreview(step)
+		}
+	case "ctrl+u":
+		_, bodyH := m.previewScroll()
+		step := max(1, bodyH/2)
+		if m.focusPane == focusList {
+			m.moveCursor(-step)
+		} else {
+			m.scrollPreview(-step)
+		}
+
+	// Mutation + list-navigation keys need a meaningful list selection, so they
+	// only act when the list is focused (D5/FR5). Under focusPreview they are
+	// no-ops — pressing d while reading a preview is ambiguous, so it does
+	// nothing rather than guess.
 	case "enter", "l", "right":
-		m.descend()
+		if m.focusPane == focusList {
+			m.descend()
+		}
 	case "backspace", "h", "left":
-		m.ascend()
-
-	// preview scrolling
-	case "J", "ctrl+d":
-		m.scrollPreview(5)
-	case "K", "ctrl+u":
-		m.scrollPreview(-5)
+		if m.focusPane == focusList {
+			m.ascend()
+		}
 
 	case "/":
 		// Enter recursive fuzzy search. enterSearch snapshots the current state
 		// (for Esc restore) and returns a walk Cmd on a cache miss (nil on a
-		// cache hit) — forward it so the async walk dispatches.
+		// cache hit) — forward it so the async walk dispatches. Search is a mode
+		// switch, not a list mutation, so it fires regardless of focusPane.
 		return m, m.enterSearch()
 
 	case "r":
-		if len(m.entries) > 0 && m.entries[m.cursor].name != ".." {
+		if m.focusPane == focusList && len(m.entries) > 0 && m.entries[m.cursor].name != ".." {
 			m.mode = modeRename
 			m.input = m.entries[m.cursor].name
 			m.statusMsg = ""
 		}
 	case "d":
-		if len(m.entries) > 0 && m.entries[m.cursor].name != ".." {
+		if m.focusPane == focusList && len(m.entries) > 0 && m.entries[m.cursor].name != ".." {
 			m.mode = modeConfirmDelete
 			m.statusMsg = ""
+		}
+
+	// Esc steps back: from preview-focus it returns to the list (D6/FR6).
+	// On the list it is a no-op (modeNormal has no other Esc behavior).
+	case "esc":
+		if m.focusPane == focusPreview {
+			m.focusPane = focusList
 		}
 	}
 	return m, nil

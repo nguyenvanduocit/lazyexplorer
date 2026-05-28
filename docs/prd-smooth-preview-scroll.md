@@ -14,6 +14,13 @@ Status: **accepted (wheel surface)** · Author: bug-filing session · Ngày: 202
 > pane — the same end-state, reached through the focus-aware key router rather
 > than a standalone caller tweak. This PRD is fully closed once pane-focus lands.
 
+> Đã ship một phần qua `prd-pane-focus.md` (2026-05-28): tầng **fine 1 dòng**
+> (D2) nay nằm trên `j/k` + focus preview, và **half-page `ctrl+d/u`**
+> (`max(1, bodyH/2)`, D3) đã có. `J`/`K` viết hoa bị xoá (pane-focus D13) — fine
+> scroll giờ là `j/k` khi focus preview, không còn phím viết hoa. **Còn lại** cho
+> PRD này: D1 (wheel notch `±1`, hiện vẫn `±3`) + D5 (hằng `previewLineStep`).
+> Phần dưới mô tả thiết kế gốc của bug; cập nhật D1/D2 wording khi ship nốt wheel.
+
 ---
 
 ## 1. Bối cảnh & vấn đề
