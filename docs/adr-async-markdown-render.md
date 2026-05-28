@@ -28,7 +28,7 @@ lúc Bubbletea đang giữ terminal thì cũng đua với input-reader của nó
 | D2 | Chống kết quả cũ | **Generation counter** (`mdGen`); chỉ apply khi gen còn khớp | điều hướng nhanh qua nhiều `.md` sinh nhiều render; kết quả về trễ của file cũ phải bị bỏ |
 | D3 | Điểm dispatch | **Một điểm reconcile ở đuôi `Update`** (`syncMarkdown`) | mọi message làm đổi selection/width/divider đều quy về một chỗ quyết định có cần render |
 | D4 | Glamour style | **Resolve một lần lúc startup** (`detectMarkdownStyle`, `main.go`), truyền tường minh vào mỗi render | render thành hàm thuần, goroutine-safe; không query terminal từ goroutine |
-| D5 | Feedback | **Chip "• rendering…"** ở status bar khi `mdPendingWidth > 0` + raw source làm placeholder tức thì | user thấy nội dung ngay và biết bản đẹp đang tới — không còn "đơ không rõ lý do" |
+| D5 | Feedback | **Spinner braille ở mép phải** status bar khi `mdPendingWidth > 0` + raw source làm placeholder tức thì | user thấy nội dung ngay và biết bản đẹp đang tới — không còn "đơ không rõ lý do" |
 
 **Vì sao style phải resolve một lần (D4) là mấu chốt:** với async, nhiều goroutine render
 chạy song song khi cuộn nhanh. Nếu mỗi render tự `WithAutoStyle()` → mỗi goroutine query
@@ -59,7 +59,7 @@ thời điểm nên không cần gen-counter; ta điều hướng giữa nhiều
 - UI không bao giờ đơ vì render markdown; file lớn vẫn cuộn/gõ phím mượt.
 - Render là hàm thuần, goroutine-safe, deterministic → test được không cần terminal thật.
 - Bỏ một vòng query terminal mỗi lần render (nhanh hơn, hết đua stdin với Bubbletea).
-- Placeholder raw + chip cho feedback tức thì.
+- Placeholder raw + spinner mép phải cho feedback tức thì.
 
 **Đánh đổi / giới hạn**
 - Cuộn rất nhanh qua nhiều `.md` sinh vài goroutine render bị bỏ kết quả (gen mismatch) —
@@ -75,8 +75,8 @@ thời điểm nên không cần gen-counter; ta điều hướng giữa nhiều
 | `main.go` | `detectMarkdownStyle()` (termenv) resolve style một lần trước `tea.Run`; set `m.mdStyle` |
 | `model.go` | + `markdownRenderedMsg`; + field `mdStyle`/`mdGen`/`mdPendingWidth`; `refreshPreview` chỉ đặt placeholder; `syncMarkdown`/`applyMarkdown` thay `ensureMarkdownRendered`; `Update` reconcile ở đuôi + case `markdownRenderedMsg` |
 | `fs.go` | `renderMarkdown(raw, width, style)` — `WithStandardStyle` khi có style, fallback `WithAutoStyle` |
-| `view.go` | chip "• rendering…" trong `renderStatus` khi `mdPendingWidth > 0` |
-| `theme.go` | + `renderingStyle` (accent) cho chip |
+| `view.go` | spinner mép phải trong `renderStatus` khi `mdPendingWidth > 0` |
+| `theme.go` | + `renderingStyle` (accent) tô spinner |
 | `*_test.go` | contract async, stale-guard (gen), drag-defer, concurrency `-race`, Update end-to-end |
 
 Verify: `go build -o lazyexplorer . && go vet ./... && go test ./...` xanh; `go test -race ./...`

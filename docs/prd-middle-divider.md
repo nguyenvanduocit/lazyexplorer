@@ -505,8 +505,8 @@ Feature: Borderless 2-pane layout with single middle divider
 11. Resize `100 → 50 → 100`: `leftRatio` không đổi, `│` snap về `int(50*0.38+0.5)=19`
     rồi `int(100*0.38+0.5)=38` — same ratio, different absolute col.
 12. Markdown reflow: chọn `README.md` ở `width=100`, drag divider qua trái →
-    `rightInner` giảm → `syncPreview` dispatch render mới, chip
-    `• rendering…` (`view.go:265-267`) xuất hiện rồi mất; preview wrap đúng
+    `rightInner` giảm → `syncPreview` dispatch render mới, spinner render
+    mép phải xuất hiện rồi mất; preview wrap đúng
     width mới.
 13. `panelBorder` không còn tham chiếu nào trong codebase: `rg 'panelBorder'`
     trả 0 hit (đã xoá khỏi `theme.go`).

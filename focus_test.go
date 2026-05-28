@@ -3,10 +3,10 @@ package main
 // Tests for pane-focus state (docs/prd-pane-focus.md). Focus is a sub-state of
 // modeNormal that decides which pane the "scroll-ish" keys (up/down/j/k/g/G/
 // ctrl+d/u) act on, and which pane a left-click commits to. The focus signal is
-// carried by the status-bar chip ([ list ] / [ preview ]) and a dimmed cursor
-// row when the preview is focused — panelBorder no longer exists (the borderless
-// middle-divider layout shipped first), so §5.7's chip+dim path is the one in
-// effect.
+// carried by the divider glow (accent half/eighth-block toward the focused pane,
+// docs/prd-focus-divider-glow.md) and a dimmed cursor row when the preview is
+// focused — panelBorder no longer exists (the borderless middle-divider layout
+// shipped first), so the divider-glow + cursor-dim path is the one in effect.
 //
 // Key construction idioms (locked by a throwaway probe against bubbletea v2.0.6):
 //   tab     → tea.KeyPressMsg{Code: tea.KeyTab}
@@ -426,19 +426,24 @@ func TestCursorRowDimWhenFocusPreview(t *testing.T) {
 	}
 }
 
-// TestStatusChipReflectsFocus — renderStatus shows a "list"/"preview" chip and
-// focus-specific hints (FR11). Hints are sourced from the keymap via shortHelp,
-// so the focus-distinguishing wording is the navigation verb ("move" on the list
-// vs "scroll" on the preview) — the chip names the pane, the Tab binding reads
-// "switch focus" in both states.
-func TestStatusChipReflectsFocus(t *testing.T) {
+// TestStatusHintsReflectFocusNoChip — the status bar carries focus-specific hints
+// (sourced from the keymap via shortHelp) but NO focus chip: focus is signalled by
+// the divider glow + dimmed cursor row (prd-focus-divider-glow). The hint wording
+// still distinguishes focus — the navigation verb is "move" on the list vs "scroll"
+// on the preview — and the Tab binding reads "switch focus" in both states.
+func TestStatusHintsReflectFocusNoChip(t *testing.T) {
 	m := longPreviewModel(t, 120, 30)
+	// The old chip was the only accent-BACKGROUND element in the footer (the hints
+	// are plain fg, the render spinner is accent fg). So "no accent bg in the status
+	// bar" == "no chip" — and it never false-matches hint words like "preview top".
+	accentBg := bgParam(t, colAccent)
 
 	m.focusPane = focusList
-	listStatus := ansi.Strip(m.renderStatus())
-	if !strings.Contains(listStatus, "list") {
-		t.Errorf("focusList status should contain 'list' chip; got %q", listStatus)
+	listRaw := m.renderStatus()
+	if strings.Contains(listRaw, accentBg) {
+		t.Error("status bar must not carry an accent-bg focus chip (focusList)")
 	}
+	listStatus := ansi.Strip(listRaw)
 	if !strings.Contains(listStatus, "move") {
 		t.Errorf("focusList hints should offer a 'move' binding; got %q", listStatus)
 	}
@@ -447,10 +452,11 @@ func TestStatusChipReflectsFocus(t *testing.T) {
 	}
 
 	m.focusPane = focusPreview
-	prevStatus := ansi.Strip(m.renderStatus())
-	if !strings.Contains(prevStatus, "preview") {
-		t.Errorf("focusPreview status should contain 'preview' chip; got %q", prevStatus)
+	prevRaw := m.renderStatus()
+	if strings.Contains(prevRaw, accentBg) {
+		t.Error("status bar must not carry an accent-bg focus chip (focusPreview)")
 	}
+	prevStatus := ansi.Strip(prevRaw)
 	if !strings.Contains(prevStatus, "scroll") {
 		t.Errorf("focusPreview hints should offer a 'scroll' binding; got %q", prevStatus)
 	}
@@ -465,6 +471,42 @@ func TestStatusChipReflectsFocus(t *testing.T) {
 	}
 	if !hasBack {
 		t.Error("focusPreview shortHelp should include the esc/back binding")
+	}
+}
+
+// TestDividerGlowReflectsFocus — the divider glows in the accent toward the focused
+// pane (prd-focus-divider-glow), in both orientations: horizontal uses a half-block
+// (▐ list / ▌ preview) in the pad col hugging the glyph; vertical uses an
+// eighth-block full-width (▔ list / ▁ preview). The glyphs appear nowhere else in
+// these plain-file frames, so a substring check on the rendered View is sufficient.
+func TestDividerGlowReflectsFocus(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, root, "a.txt", "x")
+
+	cases := []struct {
+		name   string
+		w, h   int
+		focus  focusPane
+		glyph  string
+		absent string // the opposite-side glyph must NOT appear
+	}{
+		{"horizontal list", 120, 30, focusList, "▐", "▌"},
+		{"horizontal preview", 120, 30, focusPreview, "▌", "▐"},
+		{"vertical list", 60, 30, focusList, "▔", "▁"},
+		{"vertical preview", 60, 30, focusPreview, "▁", "▔"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m := modelAt(t, root, c.w, c.h)
+			m.focusPane = c.focus
+			content := m.View().Content
+			if !strings.Contains(content, c.glyph) {
+				t.Errorf("%s: divider should glow with %q toward the focused pane", c.name, c.glyph)
+			}
+			if strings.Contains(content, c.absent) {
+				t.Errorf("%s: opposite-side glyph %q must not appear", c.name, c.absent)
+			}
+		})
 	}
 }
 

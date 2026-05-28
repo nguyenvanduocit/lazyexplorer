@@ -1,8 +1,8 @@
 # Quy ước viết tài liệu trong `docs/`
 
 File này quy định cách viết mọi doc trong thư mục `docs/` của lazyexplorer: **PRD,
-Acceptance Criteria (AC), Gherkin, ADR, Task**. Mục tiêu: doc đọc-được-ngay, trace
-thẳng về code, và nhất quán giữa các phiên — agent hay người viết đều ra cùng một format.
+Acceptance Criteria (AC), Gherkin, ADR, Task, Bug report**. Mục tiêu: doc đọc-được-ngay,
+trace thẳng về code, và nhất quán giữa các phiên — agent hay người viết đều ra cùng một format.
 
 > Đây là spec hiện hành, không phải nhật ký. Lịch sử "tại sao đổi" thuộc về git / phần
 > *Hệ quả* của ADR — không nhét vào thân doc đang sống.
@@ -32,10 +32,15 @@ thẳng về code, và nhất quán giữa các phiên — agent hay người vi
 | ADR | `adr-<slug>.md` | `adr-fs-refresh-polling.md` |
 | PRD | `prd-<slug>.md` | `prd-consistent-file-listing.md` |
 | Task (đứng riêng) | `task-<slug>.md` | `task-mouse-drag.md` |
+| Bug report | `bug-<slug>.md` | `bug-poll-preview-rerender.md` |
 
-`<slug>` là kebab-case, ngắn, mô tả tính năng. AC và Gherkin **không** đứng file riêng
+`<slug>` là kebab-case, ngắn, mô tả tính năng (hoặc bug). AC và Gherkin **không** đứng file riêng
 mặc định — chúng sống trong PRD (xem dưới). Tách `.feature` riêng chỉ khi bộ scenario
 lớn tới mức làm PRD khó đọc.
+
+> Skeleton sẵn-copy cho từng loại đặt ở `docs/templates/` (`prd-template.md`, `adr-template.md`,
+> `bug-template.md`, `task-template.md` + `README.md`). Copy → đổi tên theo bảng trên → xoá comment
+> `<!-- … -->` → điền. File này vẫn là source of truth cho quy ước; template chỉ là điểm khởi đầu.
 
 ## Header chung (mọi doc)
 
@@ -47,7 +52,8 @@ Status: **<status>** · Author: <ai/phiên nào> · Ngày: <YYYY-MM-DD>
 ---
 ```
 
-`status` hợp lệ: `draft / chờ review` · `accepted` · `superseded by <ref>`.
+`status` hợp lệ (PRD / ADR / Task): `draft / chờ review` · `accepted` · `superseded by <ref>`.
+Bug report dùng lifecycle riêng — xem mục *Bug report*.
 
 ## PRD
 
@@ -135,6 +141,38 @@ Ghi một quyết định kiến trúc + đánh đổi. Trạng thái thường 
 
 ADR là nơi **đúng** để ghi lịch sử "đổi từ A sang B vì…" (phần *Hệ quả* / *Phương án*).
 Khi một ADR bị thay thế: đặt status `superseded by adr-<slug>`, không xoá file.
+
+## Bug report
+
+Ghi lại một **bug đã quan sát** + root cause có evidence — *không* design fix. Tách
+report khỏi solution để spec-first không bị nhảy cóc: report **mô tả & chẩn đoán** vấn
+đề, còn *sửa thế nào* thuộc PRD/ADR mở **sau** khi report được review.
+
+`status` cho bug report (lifecycle riêng, không dùng set PRD/ADR):
+
+- `open / chờ review` — vừa report, chưa chốt hướng xử lý.
+- `fixed by <ref>` — đã sửa; `<ref>` trỏ commit / PRD / ADR thực hiện fix.
+- `wontfix: <lý do>` — quyết định không sửa, kèm lý do.
+- `duplicate of bug-<slug>` — trùng một report khác.
+
+Cấu trúc các section:
+
+```markdown
+## Triệu chứng        ← 1–2 câu, plain language, hành vi QUAN SÁT được (không phải lý thuyết)
+## Repro              ← precondition + steps cụ thể + điều kiện kích hoạt chính xác
+## Root cause         ← chuỗi nhân quả, mỗi bước một file:line. Chưa ra → ghi *giả thuyết* + cách falsify
+## Phạm vi & impact   ← ai/cái gì bị ảnh hưởng, mức độ; nêu cả cái KHÔNG bị ảnh hưởng để chặn hiểu lầm
+## Tài liệu cần reconcile   ← (optional) doc nào bị bug làm lộ là sai/thiếu — trích file:line; KHÔNG sửa doc accepted tại đây
+## Defer khỏi bug report    ← thứ cố ý để lại: thiết kế fix → PRD/ADR riêng; failing-test reproducer → khi implement
+```
+
+- **Evidence**: chạy được repro/test rồi → `ĐÃ VERIFY ✅` + **ngày**. Mới trace tĩnh bằng
+  đọc code, chưa chạy → nói thẳng *"trace tĩnh, chưa live repro"* và đưa repro vào *Defer*.
+  Root cause là **chuỗi `file:line`**, không phải mô tả chung chung.
+- **Không Verify gate cuối**: bug report không prescribe code change (đó là việc của PRD/ADR
+  fix), nên không chốt bằng dòng `go build … && go test …` như các doc khác.
+- Khi fix land: đổi `status` thành `fixed by <ref>`, **không** xoá file — report thành
+  lịch sử tra cứu được. Phần *Tài liệu cần reconcile* là to-do cho pass sửa doc kèm fix.
 
 ## Task
 

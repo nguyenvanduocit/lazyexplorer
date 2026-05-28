@@ -273,10 +273,10 @@ func TestRenderListHighlightsCursorRow(t *testing.T) {
 	}
 	// And exactly one body row should carry the cursorActiveStyle accent
 	// background (the cursor row). The other list rows + the preview pane
-	// never apply cursorActiveStyle. The status bar (final row) is excluded:
-	// its focus chip ("[ list ]") legitimately carries the same accent
-	// background (pane-focus D9), so counting it would double-count — we only
-	// assert "exactly one LIST row is the cursor".
+	// never apply cursorActiveStyle. The status bar (final row) is dropped so
+	// the count stays to LIST rows only. The divider glow uses an accent
+	// FOREGROUND (dividerFocusStyle), not a background, so it never matches the
+	// accent-bg probe regardless — we assert "exactly one LIST row is the cursor".
 	accentBg := accentBgANSI(t)
 	rows := strings.Split(out, "\n")
 	bodyRows := rows[:len(rows)-1] // drop the status bar row

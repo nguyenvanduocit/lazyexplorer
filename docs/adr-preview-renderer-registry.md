@@ -104,7 +104,7 @@ code**, mượn idiom.
 | `fs.go` | + `previewRenderer` struct (`fs.go:227`); + `previewRenderers` slice (`fs.go:238`); + `rendererFor` (`fs.go:244`); + `renderMarkdownPreview`, `renderCodePreview`, `renderImagePreview` wrappers; + `isImage` (`fs.go:353`); + blank imports `image/png`, `image/jpeg`, `image/gif` |
 | `model.go` | Rename fields: `mdSource/mdWidth/mdGen/mdPendingWidth/mdStyle` → `srcRaw/srcWidth/renderGen/pendingWidth/renderStyle`; rename msg: `markdownRenderedMsg` → `previewRenderedMsg`; rename fns: `syncMarkdown/applyMarkdown` → `syncPreview/applyPreview`; `refreshPreview` dùng `rendererFor` thay switch; `applyPreview` set `previewPreStyled = msg.preStyled` |
 | `main.go` | `detectRenderStyle()` (đổi tên từ `detectMarkdownStyle`); set `m.renderStyle` |
-| `view.go` | Chip "• rendering…" check `m.pendingWidth > 0` (field mới) |
+| `view.go` | Render spinner mép phải check `m.pendingWidth > 0` (field mới) |
 | `theme.go` | + `const codeHighlightStyle = "github-dark"` |
 
 Verify: `go build -o lazyexplorer . && go vet ./... && go test ./...` xanh; `go test -race ./...`

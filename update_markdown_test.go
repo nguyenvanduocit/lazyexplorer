@@ -60,8 +60,11 @@ func TestUpdateDispatchesAndAppliesMarkdown(t *testing.T) {
 	if mm.pendingWidth == 0 {
 		t.Fatal("a render should be in flight (pendingWidth>0) after the first WindowSizeMsg")
 	}
-	if !strings.Contains(mm.View().Content, "rendering") {
-		t.Error("status bar should show the rendering chip while a render is in flight")
+	// Indicator is now a right-edge braille spinner (not the "rendering" text).
+	// No spinnerTickMsg has been processed, so the frame is still 0.
+	spin := spinnerFrames[mm.spinnerFrame%len(spinnerFrames)]
+	if !strings.Contains(mm.View().Content, spin) {
+		t.Error("status bar should show the render spinner while a render is in flight")
 	}
 
 	// The runtime would run cmd in a goroutine and route its message back. Do that.
@@ -78,8 +81,8 @@ func TestUpdateDispatchesAndAppliesMarkdown(t *testing.T) {
 	if mm.pendingWidth != 0 {
 		t.Error("pendingWidth should be 0 after the render lands")
 	}
-	if strings.Contains(mm.View().Content, "rendering") {
-		t.Error("rendering chip should be gone after the render lands")
+	if strings.Contains(mm.View().Content, spin) {
+		t.Error("render spinner should be gone after the render lands")
 	}
 }
 
@@ -154,8 +157,8 @@ func TestUpdateRedispatchesRenderOnResponsiveModeFlip(t *testing.T) {
 	if mm.pendingWidth != 70 {
 		t.Errorf("after mode flip: pendingWidth = %d, want 70 (re-render at vertical full width)", mm.pendingWidth)
 	}
-	if !strings.Contains(mm.View().Content, "rendering") {
-		t.Error("rendering chip should reappear while the post-flip render is in flight")
+	if !strings.Contains(mm.View().Content, spinnerFrames[mm.spinnerFrame%len(spinnerFrames)]) {
+		t.Error("render spinner should reappear while the post-flip render is in flight")
 	}
 
 	// Drive the new render to completion and confirm the preview is restyled

@@ -247,10 +247,16 @@ func (m model) View() tea.View {
 				Width(g.leftInner).Height(g.topInner).
 				Render(m.renderList(g.leftInner, g.topInner))
 
-			// Horizontal divider strip: dividerHeight (=1) rows of the glyph
-			// repeated leftInner times. Same dimStyle as the vertical divider
-			// glyph so the two orientations read as one construct rotated.
-			dividerRow := dimStyle.Render(strings.Repeat(dividerHGlyph, g.leftInner))
+			// Horizontal divider strip glows toward the focused pane: ▔ rides the
+			// top edge (hugging the list pane above) when the list is focused, ▁
+			// rides the bottom (hugging the preview below) when the preview is —
+			// the vertical analogue of the half-block glow, sized as an eighth-block
+			// so its visual weight matches the 1-col half-block in 2-col mode.
+			glyph := "▔"
+			if m.focusPane == focusPreview {
+				glyph = "▁"
+			}
+			dividerRow := dividerFocusStyle.Render(strings.Repeat(glyph, g.leftInner))
 			divider := strings.TrimRight(strings.Repeat(dividerRow+"\n", dividerHeight), "\n")
 
 			preview := lipgloss.NewStyle().
@@ -269,12 +275,19 @@ func (m model) View() tea.View {
 				Width(g.rightInner).Height(g.bodyH).
 				Render(m.renderPreviewRegion(g.rightInner, g.bodyH))
 
-			// Divider column: bodyH copies of " │ ". Only the glyph carries colDim;
-			// the two pad cols stay un-styled so they read as the pane background
-			// and double as a wider drag hit-target without painting a heavier line.
-			dividerLine := strings.Repeat(" ", dividerPadLeft) +
-				dimStyle.Render(dividerGlyph) +
-				strings.Repeat(" ", dividerPadRight)
+			// Divider column: bodyH copies of the 3-col strip. The middle glyph stays
+			// colDim; the pad col hugging the focused pane carries a half-block accent
+			// (▐ from the list side, ▌ from the preview side) so focus reads at the
+			// pane boundary without a chip. The other pad col stays blank — still the
+			// wider drag hit-target, no heavier line painted.
+			padL := strings.Repeat(" ", dividerPadLeft)
+			padR := strings.Repeat(" ", dividerPadRight)
+			if m.focusPane == focusList {
+				padL = strings.Repeat(" ", dividerPadLeft-1) + dividerFocusStyle.Render("▐")
+			} else {
+				padR = dividerFocusStyle.Render("▌") + strings.Repeat(" ", dividerPadRight-1)
+			}
+			dividerLine := padL + dimStyle.Render(dividerGlyph) + padR
 			divider := strings.TrimRight(strings.Repeat(dividerLine+"\n", g.bodyH), "\n")
 
 			body = lipgloss.JoinHorizontal(lipgloss.Top, left, divider, right)
@@ -348,7 +361,8 @@ func renderEntryRow(e entry, w int, active, listFocused bool) string {
 		st := cursorActiveStyle
 		if !listFocused {
 			// Focus is on the preview: keep the cursor visible but soften it to
-			// colDim so the accent stays reserved for the focused pane (D10).
+			// colDim so it reinforces the divider glow (which carries the accent
+			// toward the preview) instead of competing with it (D10).
 			// Background returns a copy — cursorActiveStyle is not mutated.
 			st = cursorActiveStyle.Background(colDim)
 		}
@@ -687,27 +701,29 @@ func (m model) renderStatus() string {
 			m.width-2,
 		))
 	default:
-		// Focus chip + ShortHelp both follow m.focusPane: the chip names the
-		// focused pane (FR11), shortHelp lists only the keys relevant to it
-		// (sourced from the keymap so help text never drifts from the bindings).
-		// This chip and the dimmed cursor row are the whole focus signal — the
-		// panes are borderless, so there is no border color to flip.
-		chip := focusChipStyle.Render(" list ")
-		if m.focusPane == focusPreview {
-			chip = focusChipStyle.Render(" preview ")
-		}
+		// Focus is signalled by the divider glow (renderList/View draw it toward
+		// m.focusPane) plus the dimmed cursor row — not by a status-bar chip — so
+		// the footer is just the focus-relevant hints, sourced from the keymap so
+		// help text never drifts from the bindings.
 		hints := renderShortHelp(m.shortHelp())
-		status := chip + " " + hints
+		status := hints
 		if m.statusMsg != "" {
-			status = chip + " " + m.statusMsg + dimStyle.Render("   "+hints)
+			status = m.statusMsg + dimStyle.Render("   "+hints)
 		}
-		// While a markdown render is in flight the preview shows the raw source as
-		// a placeholder; this chip tells the user the styled version is on its way,
-		// so a brief raw→styled transition reads as "formatting", not a glitch.
+		// The render spinner lives in a fixed 2-col slot at the RIGHT edge: a
+		// reserved slot (space + glyph while rendering, two spaces when idle) keeps
+		// the hints flush-left at a constant width, so an in-flight render never
+		// shifts or clips them. Prepending the indicator used to reflow the whole
+		// bar — that was the footer flicker (bug-footer-flicker). The braille frame
+		// advances via spinnerTickMsg while pendingWidth > 0.
+		contentW := m.width - 2 // statusBarStyle Padding(0,1) eats one col each side
+		slot := "  "
 		if m.pendingWidth > 0 {
-			status = renderingStyle.Render("• rendering… ") + status
+			slot = " " + renderingStyle.Render(spinnerFrames[m.spinnerFrame%len(spinnerFrames)])
 		}
-		return statusBarStyle.Width(m.width).Render(fitWidth(status, m.width-2))
+		left := fitWidth(status, contentW-2)
+		pad := strings.Repeat(" ", max(0, contentW-2-lipgloss.Width(left)))
+		return statusBarStyle.Width(m.width).Render(left + pad + slot)
 	}
 }
 

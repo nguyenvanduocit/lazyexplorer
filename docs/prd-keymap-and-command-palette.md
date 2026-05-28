@@ -146,10 +146,10 @@ Refactor keybind từ inline switch + hardcoded hint sang `bubbles/v2 key.Bindin
 | D6 | Clipboard | **Shell out** — `pbcopy` (darwin) / `xclip -selection clipboard` (linux) / `wl-copy` (wayland) — không thêm dep | Một Go lib clipboard cần CGo (`github.com/atotto/clipboard` good but pulls X11 deps trên linux); shell-out đơn giản, fail-soft (clipboard không có → status warn, không crash), test-friendly. |
 | D7 | Palette commands v1 | `reload` · `copy path` · `cd <path>` · `quit` | 4 lệnh có pain point thật hôm nay (xem §1.3); KHÔNG bao gồm `rename`/`delete` (high-frequency, ở lane phím trực tiếp); KHÔNG bao gồm `toggle hidden` (lazyexplorer luôn show hidden — `fs.go:37` comment). |
 | D8 | Palette filter algorithm | **Substring case-insensitive** trên command Name | sahilm/fuzzy chỉ make sense khi >100 items; 4-10 commands → substring đủ; KHÔNG kéo dep mới cho v1. Nếu `prd-search.md` ship trước, palette CÓ THỂ reuse `fuzzy.Find` (defer optional optimization). |
-| D9 | Palette UI | **Overlay full-width** trên vị trí preview pane (horizontal mode) hoặc preview pane (vertical mode); status bar đổi sang prompt | Tái dùng geometry (`view.go:444 renderPreview`); KHÔNG popup dialog floating (crush dùng floating dialog vì có dialog stack — lazyexplorer chưa có, đừng prematurely build). Layout không thay đổi → simple. |
-| D10 | Help overlay UI | Same as D9: overlay vào preview pane region | Cùng lý do D9; user thấy "preview tạm ẩn" thay vì popup khó truy ngược. |
+| D9 | Palette UI | **Floating modal** căn giữa màn hình (Raycast/Spotlight-style): box opaque có border, search input ở **đỉnh box**, filtered list bên dưới; box composite đè lên nền (list + divider + preview thật) qua `lipgloss.Canvas`/`Compositor`/`Layer`. | Search-at-top + box nổi căn giữa là mental model Spotlight/Raycast user đã quen; nền (tree + preview) vẫn đọc được phía sau box → glance-friendly. lipgloss v2 (`v2.0.3`, đã trong `go.mod`) sẵn có Canvas/Compositor/Layer — cùng primitive crush dùng (`tmp/crush/.../dialog/dialog.go:166 DrawCenterCursor` qua ultraviolet), nhưng wrapper cấp cao hơn nên giữ được pattern string-based `tea.NewView(content)` hiện tại. |
+| D10 | Help overlay UI | Same as D9: **floating modal** căn giữa, body là bảng binding nhóm theo chủ đề, scrollable qua `j/k`. | Một cơ chế overlay cho cả palette lẫn help → nhất quán; nền list + preview vẫn hiện sau box. |
 | D11 | `cd <path>` UX | Palette select `cd <path>` → palette chuyển sang text-input mode cho path → Enter resolve + jail-check + cd | Composable: palette là two-stage (select command → input args). Một path text input đủ generic cho cd; tương lai nếu thêm command cần args, dùng cùng stage. |
-| D12 | `ShortHelp()` placement | Status bar bottom (`view.go:487` thay hardcoded hints) | Tái dùng vị trí, no chrome added. |
+| D12 | `ShortHelp()` placement | Normal mode: status bar bottom (`renderStatus` default case, `view.go:703-726`). Khi modal mở: status bar hiện short-help của mode đó (`[enter] run · [esc] close` cho palette; `[j/k] scroll · [esc] close` cho help). | Tái dùng vị trí, no chrome added; modal-mode hint cho user biết phím khả dụng trong modal. |
 | D13 | `FullHelp()` rendering | Trong `modeHelp` overlay: bảng nhóm theo *Navigation / Mutation / Preview / Modes / Misc* | Crush style (`tmp/crush/.../ui.go:2440+`); 5 groups là max trước khi cognitive load tăng. |
 | D14 | Phím trong palette mode | `↑/↓/j/k` di chuyển trong list; `enter` chạy; `esc` hoặc `ctrl+p` đóng; gõ ký tự → filter | Substring filter + arrow nav là pattern user quen (Spotlight, VSCode palette). `Ctrl+P` toggle để re-press không trap user. |
 | D15 | Cross-ref `prd-pane-focus.md` + `prd-search.md` | Registry **đăng ký** binding `Tab` (focus toggle) + `/` (search) trong `KeyMap`, **không** implement handler ở đây — chỉ là chỗ đứng cho help text. Handler stays in respective PRD's scope. | Help liệt kê được; ship order không bị cứng buộc; mỗi PRD ship phần handler của mình. |
@@ -158,6 +158,8 @@ Refactor keybind từ inline switch + hardcoded hint sang `bubbles/v2 key.Bindin
 | D18 | Telemetry | `action.command_palette_open` + `action.command_run{name}` qua `m.tel.Record` (giống `prd-datadog-integration.md` pattern, `model.go:240`) | Đo command popularity → input cho v2 việc thăng cấp lên direct binding. |
 | D19 | Mouse trong palette/help | Disabled toàn bộ (`handleMouse` early-return khi `mode != modeNormal` đã sẵn) | Cùng discipline `prd-search.md` D12; nhất quán. |
 | D20 | Poll loop khi palette/help mở | Skip `syncFromDisk` — `model.go:453` đã check `m.mode == modeNormal && !m.dragging` | Free behavior: `modeCommandPalette` và `modeHelp` không match `modeNormal`. Không cần code mới. |
+| D21 | Cơ chế compositing modal | `lipgloss.Canvas` + `Compositor` + `Layer` (`v2.0.3`): nền (full-screen content) là Layer `Z(0)`, modal box là Layer `Z(1)` đặt tại `(cx,cy)` căn giữa; `Canvas.Render()` trả string cuối cho `tea.NewView`. | ĐÃ VERIFY ✅ (2026-05-28, scratch test): ANSI-styled bg composite sạch **dưới** box, không leak, mỗi row đúng `m.width`. Phương án **loại**: (a) crush `Dialog` interface + raw ultraviolet `Draw` — over-engineering cho 2-overlay surface, đòi dialog-stack manager; (b) manual string-splice per-line ANSI-aware — tự viết lại đúng thứ Canvas đã đóng gói. |
+| D22 | Backdrop sau modal | **Nền giữ nguyên** (không dim), box opaque nổi đè lên. | Đơn giản nhất, giữ context tree/preview đọc được. Dim backdrop cần re-style mọi cell nền → defer (§5.10). |
 
 ## 4. Functional requirements
 
@@ -192,8 +194,10 @@ Refactor keybind từ inline switch + hardcoded hint sang `bubbles/v2 key.Bindin
   - `paletteCursor` = 0
   - `paletteCommands` = `defaultCommands()` (toàn bộ commands)
   - `paletteSecondaryInput` = "" (used cho cd path stage)
-  - Status bar render prompt `> ▏`, preview pane region render danh sách
-    commands hiện tại (highlighted = `paletteCursor`).
+  - **Floating modal** căn giữa màn hình: search prompt `> ▏` ở **đỉnh box**,
+    filtered command list bên dưới (highlighted row = `paletteCursor`, accent
+    full-width). Nền (list + divider + preview thật) hiện phía sau box. Status
+    bar hiện modal short-help (`[enter] run · [esc] close`).
 
 - **FR6** — Trong `modeCommandPalette`:
   - Ký tự in được → append vào `paletteQuery`, recompute filter (substring
@@ -224,8 +228,9 @@ Refactor keybind từ inline switch + hardcoded hint sang `bubbles/v2 key.Bindin
   jail-clamped tại root) — không phải chuỗi literal `<cwd>/..`. Cursor trên list rỗng
   → status `⚠ nothing selected`.
 
-- **FR10** — Command `cd <path>`: palette chuyển sang **stage 2**: prompt đổi
-  thành `cd > ▏`, `paletteSecondaryInput` thay `paletteQuery`. Enter:
+- **FR10** — Command `cd <path>`: palette chuyển sang **stage 1** (arg input):
+  prompt ở **đỉnh box** đổi thành `cd > ▏`, `paletteSecondaryInput` thay
+  `paletteQuery`; body box hiện mô tả command cho context. Enter:
   - Resolve `~` → home, `.` → cwd, `..` → parent, absolute → as-is.
   - `filepath.Clean` + jail-check `withinRoot(m.root, target)` (`fs.go:88`).
   - **Target là file (không phải dir)** → status `⚠ not a directory: <path>`, stage 1.
@@ -239,9 +244,9 @@ Refactor keybind từ inline switch + hardcoded hint sang `bubbles/v2 key.Bindin
 
 - **FR11** — Command `quit`: `tea.Quit`. Cùng hành vi `q`/`Ctrl+C`.
 
-- **FR12** — `?` ở `modeNormal` → vào `modeHelp`; render preview pane region
-  bằng `FullHelp()` (D13). `?`/`Esc` đóng. Cursor trong help **chỉ scrollable**
-  qua `j/k` (giống current preview); không có sub-selection.
+- **FR12** — `?` ở `modeNormal` → vào `modeHelp`; render **floating modal** căn
+  giữa với body là `FullHelp()` (D13), nền (list + preview) hiện phía sau box.
+  `?`/`Esc` đóng. Help body **chỉ scrollable** qua `j/k`; không có sub-selection.
 
 - **FR13** — Status bar (`view.go:487`) thay hardcoded hint bằng
   `m.shortHelp()` join with `dimStyle`. `shortHelp` returns
@@ -279,10 +284,11 @@ Refactor keybind từ inline switch + hardcoded hint sang `bubbles/v2 key.Bindin
 - **FR18** — Poll loop khi palette/help mở: skip `syncFromDisk` đã đúng (D20)
   qua existing check `m.mode == modeNormal` (`model.go:453`).
 
-- **FR19** — Status bar render order khi multiple chips active:
-  `• rendering…` (`view.go:495`) + focus chip (`prd-pane-focus.md` FR11) +
-  ShortHelp. Order: `<rendering chip> <focus chip> <ShortHelp>`. Truncate at
-  `fitWidth(m.width-2)` cuối — ShortHelp drop trước rendering chip drop.
+- **FR19** — Status bar composition: ShortHelp (hint theo focus) flush-left, với
+  render spinner ở slot 2 cột cố định mép phải khi `pendingWidth > 0`
+  (`prd-preview-render-stability.md`). Không có focus chip — tín hiệu focus đi qua
+  divider glow (`prd-focus-divider-glow.md`). Hints fit `fitWidth(contentW-2)` nên
+  spinner slot không bao giờ làm dịch/cắt hints.
 
 - **FR20** — Help đặt cấp ưu tiên kiểm thử: snapshot test render của
   `FullHelp()` ở 80×24 và 60×24 để đảm bảo wrap đẹp (responsive layout
@@ -872,106 +878,161 @@ func (m model) helpLineCount() int {
 }
 ```
 
-### 5.6 View — palette + help overlay (`view.go`)
+### 5.6 View — compose floating modal over the background (`view.go`)
 
-`View()` (`view.go:234`) thêm branching trước khi render preview pane:
+`View()` (`view.go:236`) builds the full background **unchanged** (list +
+divider + the **real preview** — the preview pane no longer branches on mode),
+then when `mode ∈ {modeCommandPalette, modeHelp}` composites the modal box
+centered over the whole screen via lipgloss Canvas/Compositor/Layer (D9/D21):
 
 ```go
 func (m model) View() tea.View {
-    // …existing geometry…
+    content := "loading…"
+    if m.width != 0 && m.height != 0 {
+        g := m.layout()
+        // …build `body` exactly as today (list + divider + m.renderPreview),
+        //   then the status row…
+        content = strings.Join([]string{body, m.renderStatus()}, "\n")
 
-    var body string
-    if g.vertical {
-        list := /* unchanged */
-        divider := /* unchanged */
-
-        var previewBody string
-        switch m.mode {
-        case modeCommandPalette:
-            previewBody = m.renderPalette(g.leftInner, g.bottomInner)
-        case modeHelp:
-            previewBody = m.renderHelp(g.leftInner, g.bottomInner)
-        default:
-            previewBody = m.renderPreview(g.leftInner)
+        // Floating modal overlay (palette / help) drawn OVER the screen.
+        if box, ok := m.renderModal(); ok {
+            content = overlayCentered(content, box, m.width, m.height)
         }
-        preview := lipgloss.NewStyle().
-            Width(g.leftInner).Height(g.bottomInner).
-            Render(previewBody)
-
-        body = lipgloss.JoinVertical(lipgloss.Left, list, divider, preview)
-    } else {
-        // horizontal — mirror branching for the right pane
-        // …
     }
-    // …
+    v := tea.NewView(content)
+    v.AltScreen = true
+    v.MouseMode = tea.MouseModeCellMotion
+    return v
 }
 ```
 
-`renderPalette` (`view.go`):
+`renderPreviewRegion` (`view.go:734`) is **removed**: the preview pane no longer
+changes with mode (palette/help live in the modal), so both orientations call
+`m.renderPreview(w)` directly where they call `renderPreviewRegion` today
+(`view.go:264`, `view.go:276`).
+
+`overlayCentered` composites the box over the background string (D21/D22 — no
+dim, background shows through everywhere the box does not cover):
 
 ```go
-func (m model) renderPalette(w, h int) string {
+// overlayCentered draws `box` centered over `bg` (a full w×h rendered screen)
+// and returns the composited string.
+func overlayCentered(bg, box string, w, h int) string {
+    boxW, boxH := lipgloss.Width(box), lipgloss.Height(box)
+    cx := max(0, (w-boxW)/2)
+    cy := max(0, (h-boxH)/2)
+    canvas := lipgloss.NewCanvas(w, h)
+    return canvas.Compose(lipgloss.NewCompositor(
+        lipgloss.NewLayer(bg).Z(0),
+        lipgloss.NewLayer(box).X(cx).Y(cy).Z(1),
+    )).Render()
+}
+```
+
+`renderModal` returns the styled box for the active overlay mode (`ok=false` in
+normal mode), and `modalSize` clamps the box to fit narrow/short terminals —
+the same floor discipline as `leftInnerWidth` (`view.go:196`):
+
+```go
+func (m model) renderModal() (string, bool) {
+    bw, bh := m.modalSize()
+    switch m.mode {
+    case modeCommandPalette:
+        return modalBoxStyle.Render(m.renderPaletteBody(bw, bh)), true
+    case modeHelp:
+        return modalBoxStyle.Render(m.renderHelpBody(bw, bh)), true
+    default:
+        return "", false
+    }
+}
+
+// modalSize clamps the inner box to fit. At m.width < 80 (vertical mode) or a
+// short terminal the box shrinks but never overflows.
+func (m model) modalSize() (w, h int) {
+    w = min(modalTargetCols, m.width-modalMargin*2)        // modalTargetCols=56
+    h = min(modalTargetRows, (m.height-1)-modalMargin*2)   // -1: status row
+    return max(w, modalMinCols), max(h, modalMinRows)
+}
+```
+
+`renderPaletteBody` (`view.go`) — search/arg prompt at the **box top**
+(Raycast-style; the prompt now lives in the box, not the status bar), filtered
+list below:
+
+```go
+func (m model) renderPaletteBody(w, h int) string {
     var lines []string
-    if m.paletteStage == 1 {
-        // Stage 2 prompt rendered in renderStatus instead; pane shows the
-        // selected command's description for context.
+
+    // Row 0: the search prompt (stage 0) or the cd-arg prompt (stage 1).
+    if m.paletteStage == 0 {
+        lines = append(lines, promptStyle.Background(colAccent).Foreground(colSelFg).
+            Render(fitWidth("> "+m.paletteQuery+"▏", w)))
+    } else {
         sel := m.paletteFiltered[m.paletteCursor]
-        lines = append(lines, dimStyle.Render("> "+sel.Name+":"))
-        lines = append(lines, "")
-        lines = append(lines, fitWidth(sel.Description, w))
+        lines = append(lines, promptStyle.Background(colAccent).Foreground(colSelFg).
+            Render(fitWidth(sel.Name+" > "+m.paletteSecondaryInput+"▏", w)))
+    }
+    lines = append(lines, "") // blank between prompt and body
+
+    // Stage 1: body is the chosen command's description for context.
+    if m.paletteStage == 1 {
+        sel := m.paletteFiltered[m.paletteCursor]
+        lines = append(lines, dimStyle.Render(fitWidth(sel.Description, w)))
         return strings.Join(lines, "\n")
     }
 
-    for i, c := range m.paletteFiltered {
-        if i >= h-1 {
-            break
-        }
-        cursor := "  "
-        st := fileStyle
-        if i == m.paletteCursor {
-            cursor = "▶ "
-            st = cursorActiveStyle
-        }
-        row := cursor + c.Name + dimStyle.Render("   — "+c.Description)
-        lines = append(lines, st.Width(w).Render(fitWidth(row, w)))
-    }
+    // Stage 0: filtered command rows; cursor row = full-width accent (same
+    // cursor marker the list pane uses, no caret glyph).
     if len(m.paletteFiltered) == 0 {
         lines = append(lines, dimStyle.Render(fitWidth("(no matching commands)", w)))
+        return strings.Join(lines, "\n")
+    }
+    bodyRows := h - len(lines) // rows left under the prompt + blank
+    for i, c := range m.paletteFiltered {
+        if i >= bodyRows {
+            break
+        }
+        row := c.Name + "  — " + c.Description
+        if i == m.paletteCursor {
+            lines = append(lines, cursorActiveStyle.Width(w).Render(fitWidth(row, w)))
+        } else {
+            lines = append(lines, fileStyle.Render(fitWidth(row, w)))
+        }
     }
     return strings.Join(lines, "\n")
 }
 ```
 
-`renderHelp` (`view.go`):
+`renderHelpBody` (`view.go`) — grouped bindings scrolled by `helpTop`; logic is
+the shipped `renderHelp` (`view.go:779`) verbatim, only the caller changed (it
+now fills the modal box body instead of the preview pane):
 
 ```go
-func (m model) renderHelp(w, h int) string {
-    groups := m.fullHelp() // [][]key.Binding
+func (m model) renderHelpBody(w, h int) string {
+    titles := []string{"Navigation", "Preview", "Mutation", "Modes", "Misc"}
     var lines []string
-    for gi, group := range groups {
-        // Group header
-        title := []string{"Navigation", "Preview", "Mutation", "Modes", "Misc"}[gi]
+    for gi, group := range m.fullHelp() {
+        title := ""
+        if gi < len(titles) {
+            title = titles[gi]
+        }
         lines = append(lines, renderingStyle.Render(title))
         for _, b := range group {
-            keys := b.Help().Key
-            desc := b.Help().Desc
-            row := fmt.Sprintf("  %-12s  %s", keys, desc)
-            lines = append(lines, fitWidth(row, w))
+            hb := b.Help()
+            lines = append(lines, fitWidth(fmt.Sprintf("  %-12s  %s", hb.Key, hb.Desc), w))
         }
-        lines = append(lines, "") // blank between groups
+        lines = append(lines, "") // blank separator between groups
     }
-    // Clamp scroll
-    if m.helpTop >= len(lines) {
-        // overshoot: clamp at view layer (renderer is stateless, model owns helpTop)
-    }
-    start := m.helpTop
-    if start < 0 {
-        start = 0
-    }
+    start := min(max(0, m.helpTop), len(lines))
     end := min(start+h, len(lines))
     return strings.Join(lines[start:end], "\n")
 }
 ```
+
+> **`helpLineCount` (`palette.go`) vẫn là source of truth cho scroll-clamp**
+> (`updateHelp` dùng nó để chặn `helpTop` overshoot). Modal-hoá chỉ đổi `h`
+> truyền vào (giờ là box-body rows, không phải preview-pane rows) — clamp logic
+> không đổi.
 
 ### 5.7 Status bar — prompt + ShortHelp (`view.go:475-499`)
 
@@ -1005,10 +1066,15 @@ func (m model) renderStatus() string {
         if m.statusMsg != "" {
             status = m.statusMsg + dimStyle.Render("   "+hints)
         }
+        // render spinner in a fixed 2-col slot at the right edge (no reflow)
+        contentW := m.width - 2
+        slot := "  "
         if m.pendingWidth > 0 {
-            status = renderingStyle.Render("• rendering… ") + status
+            slot = " " + renderingStyle.Render(spinnerFrames[m.spinnerFrame%len(spinnerFrames)])
         }
-        return statusBarStyle.Width(m.width).Render(fitWidth(status, m.width-2))
+        left := fitWidth(status, contentW-2)
+        pad := strings.Repeat(" ", max(0, contentW-2-lipgloss.Width(left)))
+        return statusBarStyle.Width(m.width).Render(left + pad + slot)
     }
 }
 

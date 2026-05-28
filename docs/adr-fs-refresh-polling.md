@@ -25,9 +25,23 @@ Dùng **polling qua `tea.Tick`**, chu kỳ **cố định 1 giây**, có **conte
 | D7 | cwd bị xóa | Tự leo lên ancestor sống gần nhất trong jail root (`recoverVanishedCwd`) |
 | D8 | Tạm dừng poll | Bỏ qua khi `modeRename` / `modeConfirmDelete` / `dragging` — tránh giật selection khi user đang gõ/kéo |
 
-### Vì sao content-gate (D4) là bắt buộc
+### Vì sao gate hai tầng
 
-`refreshPreview()` (`model.go:92`) reset `mdWidth=0` và `previewPreStyled=false` mỗi lần chạy → nếu reload mỗi giây vô điều kiện thì markdown bị **re-render bằng glamour mỗi 1s** (đắt + flicker + mất scroll). Gate biến steady-state thành đúng **1 `os.ReadDir` + so hash → return**. Test `TestSyncGateNoChange` chốt invariant này (`previewTop` không bị reset khi không có thay đổi).
+Gate vận hành ở **hai tầng**, mỗi tầng chặn một loại churn:
+
+1. **Dir-gate (`dirSig`, D4)** — quyết có rebuild **list** không. `dirSig(entries)` fold
+   `name+isDir+size+modTime` toàn thư mục; signature trùng → return sớm, biến steady-state
+   thành đúng **1 `os.ReadDir` + so hash → return**, không đụng list lẫn preview. Test
+   `TestSyncGateNoChange` chốt (`previewTop` không bị reset khi không có thay đổi).
+
+2. **Per-file gate (selected entry)** — quyết có refresh **preview** không.
+   `refreshPreview()` (`model.go:334`) reset `srcWidth=0` + đặt placeholder mỗi lần chạy →
+   re-render glamour/chroma. Khi dir-gate **đã** mở (một sibling đổi) nhưng entry đang chọn
+   không đổi, gọi `refreshPreview` vô điều kiện gây re-render thừa + nháy 1 frame mỗi tick
+   lúc agent ghi file cạnh. `syncFromDisk` so old-vs-new selected entry
+   (`isDir`+`size`+`modTime`) và chỉ refresh khi nó thật sự đổi (xem
+   `prd-fix-poll-preview-rerender`, `bug-poll-preview-rerender`). Test
+   `TestSyncSkipsPreviewRefreshWhenSiblingChanges` chốt tầng này.
 
 ## Các phương án đã cân nhắc
 
@@ -53,7 +67,7 @@ Khác biệt cốt lõi và lý do mình chọn hướng riêng:
 | Driver | Ăn theo blink/message stream | `tea.Tick` độc lập → robust ở idle |
 | Interval | Thích nghi theo số entry | Cố định 1s |
 | Gate | Time-throttle, rebuild vô điều kiện | Content fingerprint, rebuild chỉ khi đổi |
-| Re-render preview thừa | Có thể (họ dedup preview ở async cmd riêng, `filemodel/update.go:101`) | Không — gate chặn, bảo vệ glamour render đắt |
+| Re-render preview thừa | Có thể (họ dedup preview ở async cmd riêng, `filemodel/update.go:101`) | Không — gate hai tầng: dir-gate rebuild list, per-file gate (selected entry size+mtime) refresh preview |
 
 Mình ưu tiên content-gate vì preview của lazyexplorer **render markdown inline** (đắt, có scroll state cần giữ); superfile tách preview thành cmd async riêng nên không chịu áp lực đó.
 

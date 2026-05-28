@@ -626,7 +626,7 @@ Feature: Responsive 2-col / 1-col layout
     When the terminal narrows below 80 columns
     Then the preview re-renders at the new full-stack width
     And no raw ANSI escape leaks
-    And the chip "• rendering…" appears briefly during the re-render
+    And the render spinner appears briefly during the re-render
 
   Scenario: Drag interrupted by mode flip does not jam
     Given I am dragging the X-divider in 2-col mode
@@ -648,7 +648,7 @@ Feature: Responsive 2-col / 1-col layout
    pane dưới → preview scroll; click vào tên file trong pane dưới (folder
    listing) → vào folder đó như 2-col.
 6. Markdown reflow: đặt cursor trên `README.md` ở `width=120`, resize xuống `70`,
-   xem chip "• rendering…" hiện rồi mất; preview wrap đúng width mới, không
+   xem spinner render hiện rồi mất; preview wrap đúng width mới, không
    thấy ANSI thừa.
 7. Drag-mid-flip: bắt đầu drag X-divider ở `width=120`, resize xuống `70` trong
    lúc giữ chuột → drag dừng; release; bấm lại Y-divider ở `width=70` → drag
@@ -733,7 +733,7 @@ Feature: Responsive 2-col / 1-col layout
     `WindowSizeMsg{Width:70}` → `dragging=false` (cleared trước update lastVertical).
   - Markdown reflow: `width=100, .md selected, m.srcWidth=g.rightInner cũ`; gửi
     `WindowSizeMsg{Width:70}` → `previewBodyWidth` đổi từ rightInner → m.width=70 →
-    `syncPreview` thấy mismatch → trả Cmd non-nil; chip "• rendering…" hiện.
+    `syncPreview` thấy mismatch → trả Cmd non-nil; spinner render hiện.
   - Listing-row 0 click in vertical: `e.Y=0` chọn entry 0 đúng (firstRow=0 same
     as horizontal — guards against off-by-one).
   - List-click bound check vertical: `e.Y=topInner-1` (row cuối list pane) hợp lệ;

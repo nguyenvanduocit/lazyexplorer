@@ -36,6 +36,21 @@ func tickCmd() tea.Cmd {
 	return tea.Tick(pollInterval, func(time.Time) tea.Msg { return tickMsg{} })
 }
 
+// spinnerInterval is how fast the footer render spinner advances. ~100ms reads as
+// a smooth spin without flooding the Update loop; the loop runs ONLY while a
+// preview render is in flight (see spinnerTickCmd dispatch in syncPreview), so an
+// idle glance UI is never woken at this rate.
+const spinnerInterval = 100 * time.Millisecond
+
+// spinnerTickMsg advances the footer render spinner. Unlike tickMsg it does NOT
+// self-sustain unconditionally: the Update handler reschedules only while
+// pendingWidth > 0, so the loop dies the first tick after the render lands.
+type spinnerTickMsg struct{}
+
+func spinnerTickCmd() tea.Cmd {
+	return tea.Tick(spinnerInterval, func(time.Time) tea.Msg { return spinnerTickMsg{} })
+}
+
 // previewRenderedMsg carries the result of an async renderer (glamour/chroma/…)
 // back to the Update loop. gen identifies which dispatch produced it (stale
 // results are dropped); width is the body width it was rendered at; lines are the
@@ -156,6 +171,13 @@ type model struct {
 	// every Update tick — and drives the "rendering…" chip.
 	renderGen    uint64
 	pendingWidth int
+
+	// Footer render spinner. spinnerFrame is the current braille frame, cycled
+	// while a preview render is in flight; spinning guards the tick loop so a
+	// rapid file switch (which re-dispatches before the prior render lands) never
+	// spawns a second loop. Both reset when the render completes.
+	spinnerFrame int
+	spinning     bool
 
 	mode      mode
 	focusPane focusPane // sub-state of modeNormal; orthogonal to mode prompts (D1)
@@ -284,10 +306,14 @@ func (m *model) syncFromDisk() {
 	}
 	m.fsSig = sig
 
-	// Remember selection (by name) and scroll before we swap the slice out.
-	selName := ""
-	if m.cursor < len(m.entries) {
-		selName = m.entries[m.cursor].name
+	// Snapshot the selected entry (by value) before the swap. dirSig fired because
+	// SOMETHING in cwd changed, but the preview depends only on the selected file —
+	// comparing this snapshot against the post-swap selection tells us whether that
+	// one file changed, distinct from "a sibling changed" (bug-poll-preview-rerender).
+	var oldSel entry
+	hadSel := m.cursor < len(m.entries)
+	if hadSel {
+		oldSel = m.entries[m.cursor]
 	}
 	prevTop := m.previewTop
 
@@ -300,15 +326,36 @@ func (m *model) syncFromDisk() {
 	// removed above the selection doesn't silently re-point it at a neighbour.
 	// Fall back to a clamped index when the selected name is gone (e.g. deleted).
 	m.cursor = min(m.cursor, max(0, len(m.entries)-1))
-	if selName != "" {
+	foundSameName := false
+	if hadSel && oldSel.name != "" {
 		for i, e := range m.entries {
-			if e.name == selName {
+			if e.name == oldSel.name {
 				m.cursor = i
+				foundSameName = true
 				break
 			}
 		}
 	}
 
+	// Selected file unchanged? The list pane already reflects the sibling churn
+	// (swapped above) — so leave the preview alone. refreshPreview would reset
+	// srcWidth to 0 and stamp a placeholder, forcing a glamour/chroma re-render of an
+	// identical file: pure CPU churn plus a one-frame flash every poll tick while an
+	// agent writes files beside us. Compare the same fields dirSig folds (size+mtime,
+	// plus isDir). The synthetic ".." carries zero size/modTime, so it always matches
+	// and never re-renders its parent-listing preview — consistent with the cwd-only
+	// (non-recursive) watch scope, which couldn't detect a parent change anyway.
+	if foundSameName && m.cursor < len(m.entries) {
+		newSel := m.entries[m.cursor]
+		if oldSel.isDir == newSel.isDir &&
+			oldSel.size == newSel.size &&
+			oldSel.modTime.Equal(newSel.modTime) {
+			return // list updated; selected file is byte-identical — preview stays
+		}
+	}
+
+	// Selected file changed (or vanished → cursor moved by the clamp above): re-read
+	// the preview for the new state and restore the scroll offset.
 	m.refreshPreview()     // re-read the (possibly modified) selected file/dir
 	m.previewTop = prevTop // refreshPreview reset scroll to 0; restore it...
 	m.scrollPreview(0)     // ...then clamp it into the new content's range
@@ -622,10 +669,30 @@ func (m *model) syncPreview() tea.Cmd {
 		m.renderStartedAt = time.Now()
 	}
 	gen, path, raw, style := m.renderGen, m.srcPath, m.srcRaw, m.renderStyle
+	// Returns ONLY the render Cmd (its message is previewRenderedMsg) — the spinner
+	// loop is kicked separately in reconcilePreview so this contract stays simple
+	// for every caller that runs the Cmd and matches on previewRenderedMsg.
 	return func() tea.Msg {
 		lines, preStyled, err := r.render(path, raw, w, style)
 		return previewRenderedMsg{gen: gen, width: w, lines: lines, preStyled: preStyled, err: err}
 	}
+}
+
+// reconcilePreview is the tail preview step shared by Update's fall-through and the
+// searchWalkedMsg branch: dispatch a render if the displayed preview is stale
+// (syncPreview), then start the footer spinner loop when a render is in flight and
+// no loop is running yet. Batching the spinner kick HERE rather than inside
+// syncPreview keeps syncPreview's Cmd a bare previewRenderedMsg producer. The
+// guard (pendingWidth>0 && !spinning) only fires right after a fresh dispatch —
+// while a render is pending the loop keeps spinning itself, so it never doubles.
+func (m *model) reconcilePreview(extra tea.Cmd) tea.Cmd {
+	render := m.syncPreview()
+	var spin tea.Cmd
+	if m.pendingWidth > 0 && !m.spinning {
+		m.spinning = true
+		spin = spinnerTickCmd()
+	}
+	return tea.Batch(extra, render, spin)
 }
 
 // applyPreview applies a completed render. It drops a stale result — one whose
@@ -749,6 +816,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case previewRenderedMsg:
 		m.applyPreview(msg)
 		return m, nil
+	case spinnerTickMsg:
+		// Advance the footer spinner only while a render is in flight; otherwise
+		// let the loop die (don't reschedule) so an idle UI isn't woken at 10Hz.
+		if m.pendingWidth > 0 {
+			m.spinnerFrame++
+			return m, spinnerTickCmd()
+		}
+		m.spinning, m.spinnerFrame = false, 0
+		return m, nil
 	case searchWalkedMsg:
 		// A walk completed. Drop it entirely if the gen no longer matches — the
 		// user re-entered search, so a newer walk owns the result list (FR2).
@@ -773,14 +849,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// the list is still useful while the user knows the walk was partial.
 			m.statusMsg = "⚠ walk error: " + msg.err.Error()
 		}
-		return m, tea.Batch(cmd, m.syncPreview())
+		return m, m.reconcilePreview(cmd)
 	default:
 		return m, nil
 	}
 	// Single reconciliation point: whatever the message above did to the
 	// selection, width, or divider, decide here whether a preview (re)render
 	// must be dispatched off the Update goroutine. nil when nothing's needed.
-	return m, tea.Batch(cmd, m.syncPreview())
+	return m, m.reconcilePreview(cmd)
 }
 
 // handleMouse maps clicks and wheel events onto the two panels using the same

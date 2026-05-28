@@ -30,18 +30,21 @@ var (
 	fileStyle = lipgloss.NewStyle().Foreground(colFg)
 	dimStyle  = lipgloss.NewStyle().Foreground(colDim)
 
-	// Transient "rendering…" chip in the status bar (async markdown in flight).
-	// Uses the single accent so it draws the eye without adding a new color.
+	// renderingStyle tints the transient render spinner at the right edge of the
+	// status bar while an async preview (markdown/code/image) is in flight. The
+	// single accent draws the eye without adding a new color.
 	renderingStyle = lipgloss.NewStyle().Foreground(colAccent).Bold(true)
 
-	// focusChipStyle is the [ list ] / [ preview ] chip at the head of the
-	// status bar that signals which pane keyboard navigation acts on. Inverted
-	// (accent background) so it pops without adding a new color to the palette —
-	// the same single accent the cursor row and rendering chip use.
-	focusChipStyle = lipgloss.NewStyle().
-			Background(colAccent).
-			Foreground(colSelFg).
-			Bold(true)
+	// spinnerFrames is the braille spinner cycled one frame per ~100ms while a
+	// preview render is in flight (see model.spinnerTickCmd). Each glyph is one
+	// display column, so the reserved status-bar slot never changes width.
+	spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+	// dividerFocusStyle tints the half/eighth-block glyph of the divider toward
+	// the focused pane (prd-focus-divider-glow). Foreground only — no background —
+	// so the un-inked half blends into the borderless pane. One accent, the same
+	// colAccent as the cursor row and the render spinner.
+	dividerFocusStyle = lipgloss.NewStyle().Foreground(colAccent)
 
 	statusBarStyle = lipgloss.NewStyle().
 			Background(lipgloss.Color("#1E1E2E")).

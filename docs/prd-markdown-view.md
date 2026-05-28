@@ -56,9 +56,9 @@ render nội dung preview* cho đúng một loại file.
 - **FR7** — File markdown quá lớn vẫn bị chặn bởi `maxPreviewBytes` (256KB) như mọi
   preview khác; phần đọc được sẽ render.
 - **FR8** — Render chạy **ngoài** vòng `Update` nên UI không bao giờ đơ khi render file
-  lớn. Trong lúc render, preview hiện ngay raw source làm placeholder và status bar hiện
-  chip "• rendering…" báo bản đẹp đang tới. Khi render xong, preview đổi sang bản styled
-  và chip biến mất. Điều hướng nhanh qua nhiều `.md`: kết quả render về trễ của file đã
+  lớn. Trong lúc render, preview hiện ngay raw source làm placeholder và một spinner braille
+  ở mép phải status bar báo bản đẹp đang tới. Khi render xong, preview đổi sang bản styled
+  và spinner biến mất. Điều hướng nhanh qua nhiều `.md`: kết quả render về trễ của file đã
   rời cursor bị bỏ, không bao giờ đè nội dung file đang chọn.
 
 ## 5. Technical design
@@ -119,7 +119,7 @@ các field dưới đây phục vụ pipeline chung cho mọi renderer, không c
 | `renderStyle string` | Style hint resolve một lần lúc startup (`"dark"`/`"light"`/`"notty"`); `""` → auto (fallback cho caller không phải program, vd test). |
 | `previewPreStyled bool` | `true` khi `m.preview` chứa dòng ANSI verbatim từ renderer → `renderPreview` **không** gọi `fitWidth`. Giá trị đến từ renderer (field `preStyled` của `previewRenderedMsg`), không hardcode. |
 | `renderGen uint64` | Đánh số mỗi lần dispatch render; kết quả chỉ apply khi gen còn khớp → bỏ render cũ về trễ. |
-| `pendingWidth int` | Bề rộng của render đang bay (`0` = không có) → `syncPreview` không re-dispatch cùng việc mỗi tick; cũng là tín hiệu hiện chip "• rendering…". |
+| `pendingWidth int` | Bề rộng của render đang bay (`0` = không có) → `syncPreview` không re-dispatch cùng việc mỗi tick; cũng là tín hiệu hiện spinner mép phải. |
 
 `m.preview`, `m.previewTop` giữ nguyên vai trò.
 
@@ -301,9 +301,9 @@ Feature: Rendered markdown in the preview pane
   (`view.go:141`). *(view.go)*
 - [x] **T10 — Error fallback.** Renderer lỗi → `plainLines(srcRaw)` + status hint trong
   `applyPreview` (`model.go:299`, FR5). *(model.go)*
-- [x] **T11 — Style resolve + chip.** `detectRenderStyle()` (termenv) ở `main.go:18` set
-  `m.renderStyle` một lần trước `tea.Run`; chip "• rendering…" trong `renderStatus` khi
-  `m.pendingWidth > 0` (`view.go:170`) + `renderingStyle` ở `theme.go:35`. *(main.go, view.go, theme.go)*
+- [x] **T11 — Style resolve + spinner.** `detectRenderStyle()` (termenv) ở `main.go:18` set
+  `m.renderStyle` một lần trước `tea.Run`; spinner braille trong slot 2 cột mép phải của
+  `renderStatus` khi `m.pendingWidth > 0` (`view.go:713-726`) + `renderingStyle` ở `theme.go:33`. *(main.go, view.go, theme.go)*
 - [x] **T12 — Verify.** `go build -o lazyexplorer . && go vet ./... && go test ./...` xanh;
   `go test -race ./...` xanh; visual verdict hai frame (đang render / đã render) đạt.
 
@@ -315,6 +315,6 @@ Feature: Rendered markdown in the preview pane
 | `main.go` | `detectRenderStyle()` resolve style một lần, set `m.renderStyle` trước `tea.Run` |
 | `fs.go` | `isMarkdown`, `renderMarkdown(raw, width, style)`, `renderMarkdownPreview` wrapper, `previewRenderer` struct, `previewRenderers` registry, `rendererFor` |
 | `model.go` | fields `srcPath`/`srcRaw`/`srcWidth`/`renderStyle`/`renderGen`/`pendingWidth` + `previewRenderedMsg`; `refreshPreview` dùng registry + placeholder; `syncPreview`/`applyPreview`; `previewBodyWidth`; `Update` reconcile ở đuôi + `case previewRenderedMsg` |
-| `view.go` | `renderPreview` bypass `fitWidth` khi `previewPreStyled`; chip "• rendering…" khi `pendingWidth > 0` |
-| `theme.go` | `renderingStyle` (accent) cho chip |
+| `view.go` | `renderPreview` bypass `fitWidth` khi `previewPreStyled`; spinner mép phải khi `pendingWidth > 0` |
+| `theme.go` | `renderingStyle` (accent) tô spinner |
 | `*_test.go` | detection + async contract + stale-guard (gen) + drag-defer + concurrency `-race` + Update end-to-end + reset hygiene; `zz_dump_test.go` harness visual (gated) |
