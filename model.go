@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 )
 
@@ -50,6 +51,8 @@ const (
 	modeConfirmDelete
 	modeRename
 	modeSearch
+	modeCommandPalette // ctrl+p — pick/run a command (prd-keymap-and-command-palette)
+	modeHelp           // ? — full-help overlay
 )
 
 // walkCacheTTL is how long a recursive walk stays fresh enough to reuse without
@@ -166,6 +169,25 @@ type model struct {
 	searchSavedCursor  int
 	searchSavedListTop int
 
+	// Key bindings — the single source of truth for key codes + help text
+	// (prd-keymap-and-command-palette). Set once in newModel; updateNormal and the
+	// help/status renderers match against it instead of literal key strings.
+	keymap KeyMap
+
+	// Command palette state (modeCommandPalette). paletteStage 0 = pick a command
+	// (filter via paletteQuery over paletteFiltered, cursor = paletteCursor);
+	// stage 1 = collect a text argument (paletteSecondaryInput, only `cd` uses it).
+	// All reset to zero by exitCommandPalette.
+	paletteStage          int
+	paletteQuery          string
+	paletteSecondaryInput string
+	paletteCursor         int
+	paletteFiltered       []Command
+
+	// Help overlay state (modeHelp): helpTop is the scroll offset into the
+	// rendered help body (fullHelp groups). Reset on enter/exit.
+	helpTop int
+
 	width  int
 	height int
 
@@ -185,7 +207,7 @@ func newModel(root string, tel Recorder) model {
 	if tel == nil {
 		tel = noopRecorder{}
 	}
-	m := model{root: root, cwd: root, leftRatio: 0.38, topRatio: 0.33, tel: tel}
+	m := model{root: root, cwd: root, leftRatio: 0.38, topRatio: 0.33, keymap: defaultKeyMap(), tel: tel}
 	m.reload()
 	return m
 }
@@ -563,6 +585,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			nm, cmd = m.updateRename(msg)
 		case modeSearch:
 			nm, cmd = m.updateSearch(msg)
+		case modeCommandPalette:
+			nm, cmd = m.updateCommandPalette(msg)
+		case modeHelp:
+			nm, cmd = m.updateHelp(msg)
 		default:
 			nm, cmd = m.updateNormal(msg)
 		}
@@ -869,41 +895,53 @@ func (m *model) previewClick(y int, g geometry) {
 }
 
 func (m model) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "q", "ctrl+c":
+	km := m.keymap
+
+	switch {
+	case key.Matches(msg, km.Quit):
 		return m, tea.Quit
 
-	// Tab toggles which pane the navigation keys act on (D3). Two panes →
-	// forward == backward, so one key is enough; there is no shift+tab.
-	case "tab":
+	case key.Matches(msg, km.CommandPalette):
+		m.enterCommandPalette()
+		return m, nil
+
+	case key.Matches(msg, km.FullHelp):
+		m.enterHelp()
+		return m, nil
+
+	// Tab toggles which pane the navigation keys act on (prd-pane-focus D3).
+	// Two panes → forward == backward, so one key is enough; no shift+tab.
+	case key.Matches(msg, km.FocusToggle):
 		if m.focusPane == focusList {
 			m.focusPane = focusPreview
 		} else {
 			m.focusPane = focusList
 		}
 
-	// "Scroll-ish" keys route to the focused pane (D4). On the list they move
-	// the cursor; on the preview they scroll the viewport — the same mental
-	// model the mouse wheel already uses.
-	case "down", "j":
+	// "Scroll-ish" keys route to the focused pane (prd-pane-focus D4): on the
+	// list they move the cursor, on the preview they scroll the viewport — the
+	// same mental model the mouse wheel uses. MoveDown ≡ PreviewScrollDown by key
+	// code; key.Matches compares codes only, so one case per pair matches either
+	// and the focusPane branch picks the behavior.
+	case key.Matches(msg, km.MoveDown):
 		if m.focusPane == focusList {
 			m.moveCursor(1)
 		} else {
 			m.scrollPreview(1)
 		}
-	case "up", "k":
+	case key.Matches(msg, km.MoveUp):
 		if m.focusPane == focusList {
 			m.moveCursor(-1)
 		} else {
 			m.scrollPreview(-1)
 		}
-	case "g":
+	case key.Matches(msg, km.GoTop): // ≡ km.PreviewJumpTop
 		if m.focusPane == focusList {
 			m.moveCursor(-len(m.entries)) // overshoots → clamps to index 0
 		} else {
 			m.previewTop = 0
 		}
-	case "G":
+	case key.Matches(msg, km.GoBottom): // ≡ km.PreviewJumpBottom
 		if m.focusPane == focusList {
 			m.moveCursor(len(m.entries)) // overshoots → clamps to last index
 		} else {
@@ -911,11 +949,10 @@ func (m model) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.previewTop = max(0, m.previewLen()-bodyH)
 		}
 
-	// ctrl+d/u is the coarse "half-page" tier (D11). Step is half the preview
-	// body, recomputed each press so it tracks resizes/divider drags (min 1 so a
-	// 1-row body still moves). It half-pages the cursor when the list is focused,
-	// the preview viewport when the preview is focused.
-	case "ctrl+d":
+	// ctrl+d/u is the coarse "half-page" tier (prd-pane-focus D11). Step is half
+	// the preview body, recomputed each press so it tracks resizes/divider drags
+	// (min 1 so a 1-row body still moves).
+	case key.Matches(msg, km.PreviewHalfPageDown):
 		_, bodyH := m.previewScroll()
 		step := max(1, bodyH/2)
 		if m.focusPane == focusList {
@@ -923,7 +960,7 @@ func (m model) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		} else {
 			m.scrollPreview(step)
 		}
-	case "ctrl+u":
+	case key.Matches(msg, km.PreviewHalfPageUp):
 		_, bodyH := m.previewScroll()
 		step := max(1, bodyH/2)
 		if m.focusPane == focusList {
@@ -936,37 +973,35 @@ func (m model) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// only act when the list is focused (D5/FR5). Under focusPreview they are
 	// no-ops — pressing d while reading a preview is ambiguous, so it does
 	// nothing rather than guess.
-	case "enter", "l", "right":
+	case key.Matches(msg, km.OpenEntry):
 		if m.focusPane == focusList {
 			m.descend()
 		}
-	case "backspace", "h", "left":
+	case key.Matches(msg, km.GoUp):
 		if m.focusPane == focusList {
 			m.ascend()
 		}
-
-	case "/":
-		// Enter recursive fuzzy search. enterSearch snapshots the current state
-		// (for Esc restore) and returns a walk Cmd on a cache miss (nil on a
-		// cache hit) — forward it so the async walk dispatches. Search is a mode
-		// switch, not a list mutation, so it fires regardless of focusPane.
-		return m, m.enterSearch()
-
-	case "r":
+	case key.Matches(msg, km.Rename):
 		if m.focusPane == focusList && len(m.entries) > 0 && m.entries[m.cursor].name != ".." {
 			m.mode = modeRename
 			m.input = m.entries[m.cursor].name
 			m.statusMsg = ""
 		}
-	case "d":
+	case key.Matches(msg, km.Delete):
 		if m.focusPane == focusList && len(m.entries) > 0 && m.entries[m.cursor].name != ".." {
 			m.mode = modeConfirmDelete
 			m.statusMsg = ""
 		}
 
-	// Esc steps back: from preview-focus it returns to the list (D6/FR6).
-	// On the list it is a no-op (modeNormal has no other Esc behavior).
-	case "esc":
+	// Search is a mode switch, not a list mutation — fires regardless of focusPane.
+	// enterSearch snapshots state (for Esc restore) and returns a walk Cmd on a
+	// cache miss (nil on a cache hit) — forward it so the async walk dispatches.
+	case key.Matches(msg, km.Search):
+		return m, m.enterSearch()
+
+	// Esc steps back: from preview-focus it returns to the list (D6/FR6). On the
+	// list it is a no-op (modeNormal has no other Esc behavior).
+	case key.Matches(msg, km.Back):
 		if m.focusPane == focusPreview {
 			m.focusPane = focusList
 		}

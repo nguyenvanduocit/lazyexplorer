@@ -427,7 +427,10 @@ func TestCursorRowDimWhenFocusPreview(t *testing.T) {
 }
 
 // TestStatusChipReflectsFocus — renderStatus shows a "list"/"preview" chip and
-// focus-specific hints (FR11).
+// focus-specific hints (FR11). Hints are sourced from the keymap via shortHelp,
+// so the focus-distinguishing wording is the navigation verb ("move" on the list
+// vs "scroll" on the preview) — the chip names the pane, the Tab binding reads
+// "switch focus" in both states.
 func TestStatusChipReflectsFocus(t *testing.T) {
 	m := longPreviewModel(t, 120, 30)
 
@@ -436,8 +439,11 @@ func TestStatusChipReflectsFocus(t *testing.T) {
 	if !strings.Contains(listStatus, "list") {
 		t.Errorf("focusList status should contain 'list' chip; got %q", listStatus)
 	}
-	if !strings.Contains(listStatus, "focus preview") {
-		t.Errorf("focusList hints should offer '[tab] focus preview'; got %q", listStatus)
+	if !strings.Contains(listStatus, "move") {
+		t.Errorf("focusList hints should offer a 'move' binding; got %q", listStatus)
+	}
+	if !strings.Contains(listStatus, "switch focus") {
+		t.Errorf("focusList hints should offer '[tab] switch focus'; got %q", listStatus)
 	}
 
 	m.focusPane = focusPreview
@@ -445,8 +451,8 @@ func TestStatusChipReflectsFocus(t *testing.T) {
 	if !strings.Contains(prevStatus, "preview") {
 		t.Errorf("focusPreview status should contain 'preview' chip; got %q", prevStatus)
 	}
-	if !strings.Contains(prevStatus, "focus list") {
-		t.Errorf("focusPreview hints should offer '[tab] focus list'; got %q", prevStatus)
+	if !strings.Contains(prevStatus, "scroll") {
+		t.Errorf("focusPreview hints should offer a 'scroll' binding; got %q", prevStatus)
 	}
 	if !strings.Contains(prevStatus, "esc") {
 		t.Errorf("focusPreview hints should mention 'esc'; got %q", prevStatus)

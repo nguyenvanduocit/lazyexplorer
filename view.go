@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
@@ -253,7 +254,7 @@ func (m model) View() tea.View {
 
 			preview := lipgloss.NewStyle().
 				Width(g.leftInner).Height(g.bottomInner).
-				Render(m.renderPreview(g.leftInner))
+				Render(m.renderPreviewRegion(g.leftInner, g.bottomInner))
 
 			body = lipgloss.JoinVertical(lipgloss.Left, list, divider, preview)
 		} else {
@@ -265,7 +266,7 @@ func (m model) View() tea.View {
 
 			right := lipgloss.NewStyle().
 				Width(g.rightInner).Height(g.bodyH).
-				Render(m.renderPreview(g.rightInner))
+				Render(m.renderPreviewRegion(g.rightInner, g.bodyH))
 
 			// Divider column: bodyH copies of " │ ". Only the glyph carries colDim;
 			// the two pad cols stay un-styled so they read as the pane background
@@ -512,19 +513,38 @@ func (m model) renderStatus() string {
 			return p + " " + dimStyle.Render(m.statusMsg)
 		}
 		return p
-	default:
-		// Focus chip + hints both follow m.focusPane: the chip names the focused
-		// pane (FR11), the hints list only the keys relevant to it. This chip and
-		// the dimmed cursor row are the whole focus signal — the panes are
-		// borderless, so there is no border color to flip.
-		var chip, hints string
-		if m.focusPane == focusList {
-			chip = focusChipStyle.Render(" list ")
-			hints = "[↑↓/jk] move  [tab] focus preview  [enter/l] open  [h/bksp] up  [r] rename  [d] delete  [q] quit"
+	case modeCommandPalette:
+		// Stage 0 is a generic filter prompt "> query▏"; stage 1 prefixes the
+		// chosen command so the user sees what they are arging ("cd > path▏").
+		var prompt string
+		if m.paletteStage == 0 {
+			prompt = promptStyle.Background(colAccent).Foreground(colSelFg).
+				Render("> " + m.paletteQuery + "▏")
 		} else {
-			chip = focusChipStyle.Render(" preview ")
-			hints = "[↑↓/jk] scroll  [tab] focus list  [g/G] top/bottom  [ctrl+d/u] half-page  [esc] back  [q] quit"
+			sel := m.paletteFiltered[m.paletteCursor]
+			prompt = promptStyle.Background(colAccent).Foreground(colSelFg).
+				Render(sel.Name + " > " + m.paletteSecondaryInput + "▏")
 		}
+		if m.statusMsg != "" {
+			return prompt + " " + dimStyle.Render(m.statusMsg)
+		}
+		return prompt
+	case modeHelp:
+		return statusBarStyle.Width(m.width).Render(fitWidth(
+			"press ? or esc to close   "+dimStyle.Render("j/k scroll"),
+			m.width-2,
+		))
+	default:
+		// Focus chip + ShortHelp both follow m.focusPane: the chip names the
+		// focused pane (FR11), shortHelp lists only the keys relevant to it
+		// (sourced from the keymap so help text never drifts from the bindings).
+		// This chip and the dimmed cursor row are the whole focus signal — the
+		// panes are borderless, so there is no border color to flip.
+		chip := focusChipStyle.Render(" list ")
+		if m.focusPane == focusPreview {
+			chip = focusChipStyle.Render(" preview ")
+		}
+		hints := renderShortHelp(m.shortHelp())
 		status := chip + " " + hints
 		if m.statusMsg != "" {
 			status = chip + " " + m.statusMsg + dimStyle.Render("   "+hints)
@@ -536,6 +556,118 @@ func (m model) renderStatus() string {
 			status = renderingStyle.Render("• rendering… ") + status
 		}
 		return statusBarStyle.Width(m.width).Render(fitWidth(status, m.width-2))
+	}
+}
+
+// renderPreviewRegion renders whatever occupies the preview pane area for the
+// current mode: the command palette, the help overlay, or the file/folder
+// preview. The palette and help take over the preview region rather than
+// floating in a dialog — there is no dialog stack to manage (D9/D10).
+func (m model) renderPreviewRegion(w, h int) string {
+	switch m.mode {
+	case modeCommandPalette:
+		return m.renderPalette(w, h)
+	case modeHelp:
+		return m.renderHelp(w, h)
+	default:
+		return m.renderPreview(w)
+	}
+}
+
+// renderPalette draws the command list (stage 0). In stage 1 (arg input) the
+// prompt itself lives in the status bar, so the pane shows the chosen command's
+// description for context. The cursor row carries the full-width accent
+// highlight — the same cursor marker the list pane uses (no caret glyph).
+func (m model) renderPalette(w, h int) string {
+	if m.paletteStage == 1 {
+		sel := m.paletteFiltered[m.paletteCursor]
+		return strings.Join([]string{
+			dimStyle.Render("> " + sel.Name + ":"),
+			"",
+			fitWidth(sel.Description, w),
+		}, "\n")
+	}
+	if len(m.paletteFiltered) == 0 {
+		return dimStyle.Render(fitWidth("(no matching commands)", w))
+	}
+	var lines []string
+	for i, c := range m.paletteFiltered {
+		if i >= h {
+			break
+		}
+		row := c.Name + "  — " + c.Description
+		if i == m.paletteCursor {
+			lines = append(lines, cursorActiveStyle.Width(w).Render(fitWidth(row, w)))
+		} else {
+			lines = append(lines, fileStyle.Render(fitWidth(row, w)))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// renderHelp draws the full-help overlay: bindings grouped under titles, scrolled
+// by helpTop. The group order matches fullHelp; helpLineCount counts the same
+// lines so the scroll clamp never overshoots.
+func (m model) renderHelp(w, h int) string {
+	titles := []string{"Navigation", "Preview", "Mutation", "Modes", "Misc"}
+	var lines []string
+	for gi, group := range m.fullHelp() {
+		title := ""
+		if gi < len(titles) {
+			title = titles[gi]
+		}
+		lines = append(lines, renderingStyle.Render(title))
+		for _, b := range group {
+			hb := b.Help()
+			lines = append(lines, fitWidth(fmt.Sprintf("  %-12s  %s", hb.Key, hb.Desc), w))
+		}
+		lines = append(lines, "") // blank separator between groups
+	}
+	start := min(max(0, m.helpTop), len(lines))
+	end := min(start+h, len(lines))
+	return strings.Join(lines[start:end], "\n")
+}
+
+// renderShortHelp joins key bindings into a "[key] desc" hint string for the
+// status bar.
+func renderShortHelp(bs []key.Binding) string {
+	parts := make([]string, 0, len(bs))
+	for _, b := range bs {
+		hb := b.Help()
+		parts = append(parts, "["+hb.Key+"] "+hb.Desc)
+	}
+	return strings.Join(parts, "  ")
+}
+
+// shortHelp returns the status-bar bindings for the current focus (FR14). The
+// help text comes straight from the keymap, so it can never drift from the
+// actual bindings.
+func (m model) shortHelp() []key.Binding {
+	km := m.keymap
+	if m.focusPane == focusList {
+		return []key.Binding{
+			km.MoveDown, km.FocusToggle, km.OpenEntry, km.GoUp,
+			km.Rename, km.Delete,
+			km.CommandPalette, km.FullHelp, km.Quit,
+		}
+	}
+	return []key.Binding{
+		km.PreviewScrollDown, km.FocusToggle, km.PreviewJumpTop, km.PreviewJumpBottom,
+		km.PreviewHalfPageDown, km.Back,
+		km.CommandPalette, km.FullHelp, km.Quit,
+	}
+}
+
+// fullHelp returns the bindings grouped for the help overlay (FR15). Group order
+// matches the titles in renderHelp: Navigation, Preview, Mutation, Modes, Misc.
+func (m model) fullHelp() [][]key.Binding {
+	km := m.keymap
+	return [][]key.Binding{
+		{km.MoveUp, km.MoveDown, km.GoTop, km.GoBottom, km.OpenEntry, km.GoUp},
+		{km.PreviewScrollUp, km.PreviewScrollDown, km.PreviewHalfPageUp, km.PreviewHalfPageDown, km.PreviewJumpTop, km.PreviewJumpBottom},
+		{km.Rename, km.Delete},
+		{km.FocusToggle, km.Search, km.CommandPalette, km.FullHelp, km.Back},
+		{km.Quit},
 	}
 }
 

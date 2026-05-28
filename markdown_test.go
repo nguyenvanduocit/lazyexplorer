@@ -46,7 +46,8 @@ func modelAt(t *testing.T, dir string, width, height int) model {
 	m := model{
 		root: dir, cwd: dir,
 		leftRatio: 0.38, topRatio: 0.33,
-		width: width, height: height,
+		keymap: defaultKeyMap(),
+		width:  width, height: height,
 		tel: noopRecorder{},
 	}
 	m.reload()
