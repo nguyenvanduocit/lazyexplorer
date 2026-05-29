@@ -971,7 +971,7 @@ func (m model) shortHelp() []key.Binding {
 	if m.focusPane == focusList {
 		return []key.Binding{
 			km.MoveDown, km.FocusToggle, km.OpenEntry, km.GoUp,
-			km.Rename, km.Delete,
+			km.Rename, km.Delete, km.OpenInEditor,
 			km.CommandPalette, km.FullHelp, km.Quit,
 		}
 	}
@@ -996,7 +996,7 @@ func (m model) fullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{km.MoveUp, km.MoveDown, km.GoTop, km.GoBottom, km.OpenEntry, km.GoUp},
 		{km.PreviewScrollUp, km.PreviewScrollDown, km.PreviewHalfPageUp, km.PreviewHalfPageDown, km.PreviewJumpTop, km.PreviewJumpBottom, km.PreviewScrollLeft, km.PreviewScrollRight, km.PreviewHScrollHalfLeft, km.PreviewHScrollHalfRight, km.PreviewHScrollReset, km.PreviewToggleWrap, km.ToggleDiff},
-		{km.Rename, km.Delete},
+		{km.Rename, km.Delete, km.OpenInEditor},
 		{km.FocusToggle, km.Search, km.CommandPalette, km.FullHelp, km.Back},
 		{km.Quit},
 	}

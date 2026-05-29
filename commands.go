@@ -27,6 +27,31 @@ type Command struct {
 // is available for the current OS (no pbcopy / xclip / wl-copy).
 var errClipboardUnsupported = errors.New("no clipboard helper found (need pbcopy, xclip, or wl-copy)")
 
+// errNoEditor is returned by editorCommand when neither $VISUAL nor $EDITOR names
+// a runnable editor. We refuse to guess (no vi/nano fallback): on a beside-an-agent
+// box $EDITOR is set, and dropping a non-vi user into vi is the rage-quit.
+var errNoEditor = errors.New("set $VISUAL or $EDITOR to open files in your editor")
+
+// editorCommand builds the *exec.Cmd that opens absPath in the user's editor,
+// preferring $VISUAL then $EDITOR (getenv is injected so tests set env without
+// mutating process state — same seam as split.go's buildCmd). The editor string is
+// split on whitespace via strings.Fields so flags survive (`code --wait`,
+// `emacsclient -t`) and absPath becomes a SEPARATE trailing argv token — no shell,
+// so a path with spaces is injection-safe (mirrors split.go's argv ethos).
+//
+// A whitespace-only var (e.g. EDITOR="   ") yields no fields and FALLS THROUGH to
+// the next candidate, then to errNoEditor — never an index panic. Out of scope: a
+// quoted space *inside* the editor name itself (e.g. EDITOR=`"/my dir/ed" --wait`)
+// is split into two tokens; the beside-an-agent norm is a bare command + flags.
+func editorCommand(getenv func(string) string, absPath string) (*exec.Cmd, error) {
+	for _, raw := range []string{getenv("VISUAL"), getenv("EDITOR")} {
+		if fields := strings.Fields(raw); len(fields) > 0 {
+			return exec.Command(fields[0], append(fields[1:], absPath)...), nil
+		}
+	}
+	return nil, errNoEditor
+}
+
 // defaultCommands is the v1 palette command set. Four commands that solve a real
 // pain today: reload (poll loop missed a change), copy path (paste into the agent
 // chat), cd (jump within the jail without descending pane-by-pane), quit. Rename
@@ -56,6 +81,31 @@ func defaultCommands() []Command {
 				}
 				m.statusMsg = "copied " + full
 				return nil
+			},
+		},
+		{
+			Name: "open in editor", Description: "open the selected file in $EDITOR",
+			Run: func(m *model, _ string) tea.Cmd {
+				// Discoverability twin of the `e` key — same guard, since the palette is
+				// a second entry point: selectedAbsPath() on ".." returns the parent
+				// DIRECTORY, so without this an editor would be launched on a dir.
+				if len(m.entries) == 0 {
+					m.statusMsg = "⚠ nothing selected"
+					return nil
+				}
+				sel := m.entries[m.cursor]
+				if sel.name == ".." || sel.isDir {
+					m.statusMsg = "⚠ not a file"
+					return nil
+				}
+				cmd, err := editorCommand(os.Getenv, m.selectedAbsPath())
+				if err != nil {
+					m.statusMsg = "⚠ " + err.Error()
+					return nil
+				}
+				m.tel.Record("action.open_editor", map[string]any{"name": sel.name})
+				m.statusMsg = ""
+				return tea.ExecProcess(cmd, func(err error) tea.Msg { return editorFinishedMsg{err} })
 			},
 		},
 		{

@@ -121,6 +121,12 @@ func walkTreeCmd(root string, gen uint64) tea.Cmd {
 	}
 }
 
+// editorFinishedMsg lands when the suspended editor exits and tea.ExecProcess
+// resumes the program (alt-screen + mouse auto-restored — see view.go's View()).
+// On success we reload cwd immediately so an edit shows without waiting on the 1s
+// poll tick; on error we surface it in the status line (prd-open-in-editor §5.3).
+type editorFinishedMsg struct{ err error }
+
 // focusPane is which of the two panes keyboard navigation acts on. It is a
 // sub-state of modeNormal — orthogonal to mode (which owns the rename/delete
 // prompts) — so the "scroll-ish" keys (up/down/j/k/g/G/ctrl+d/u) and a
@@ -1135,6 +1141,37 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusMsg = "⚠ walk error: " + msg.err.Error()
 		}
 		return m, m.reconcilePreview(cmd)
+	case editorFinishedMsg:
+		// The editor exited and tea.ExecProcess resumed us (alt-screen + mouse already
+		// restored). On a clean exit reload cwd now — snappier than waiting for the 1s
+		// poll to notice the edit — then let the tail reconcile re-render the (possibly
+		// changed) selected file. On error surface it; the listing is untouched.
+		if msg.err != nil {
+			m.statusMsg = "⚠ editor: " + msg.err.Error()
+			return m, nil
+		}
+		// Snapshot the edited file's NAME before reload(): reload clamps the cursor by
+		// index only, so a file the editor created that sorts above the edited one would
+		// silently re-point the selection (and its preview) at the new neighbour. Re-seek
+		// by name afterward — mirroring ascend() and the poll path syncFromDisk — so the
+		// cursor stays on the file the user just edited. The clamp remains the fallback
+		// when the name is gone (editor renamed the file mid-edit).
+		var editedName string
+		if m.cursor >= 0 && m.cursor < len(m.entries) {
+			editedName = m.entries[m.cursor].name
+		}
+		m.reload()
+		if editedName != "" {
+			for i, e := range m.entries {
+				if e.name == editedName {
+					m.cursor = i
+					break
+				}
+			}
+			m.refreshPreview()
+		}
+		m.statusMsg = ""
+		return m, m.reconcilePreview(nil)
 	default:
 		return m, nil
 	}
@@ -1540,6 +1577,29 @@ func (m model) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.mode = modeConfirmDelete
 			m.statusMsg = ""
 		}
+
+	// e opens the selected FILE in $VISUAL/$EDITOR, suspending the TUI (prd-open-in-editor
+	// D1). focusList-only (mirrors Rename/Delete) and files-only: a dir or the synthetic
+	// ".." has nothing to edit. editorCommand resolves the editor (no editor set → status,
+	// no exec); on success tea.ExecProcess releases the terminal, runs the editor, then
+	// resumes and sends editorFinishedMsg. Returned directly (not through the tail
+	// reconcilePreview) — the exec must be the sole cmd this keypress yields.
+	case key.Matches(msg, km.OpenInEditor):
+		if m.focusPane != focusList || len(m.entries) == 0 {
+			return m, nil
+		}
+		sel := m.entries[m.cursor]
+		if sel.name == ".." || sel.isDir {
+			return m, nil
+		}
+		cmd, err := editorCommand(os.Getenv, m.selectedAbsPath())
+		if err != nil {
+			m.statusMsg = "⚠ " + err.Error()
+			return m, nil
+		}
+		m.tel.Record("action.open_editor", map[string]any{"name": sel.name})
+		m.statusMsg = ""
+		return m, tea.ExecProcess(cmd, func(err error) tea.Msg { return editorFinishedMsg{err} })
 
 	// Search is a mode switch, not a list mutation — fires regardless of focusPane.
 	// enterSearch snapshots state (for Esc restore) and returns a walk Cmd on a

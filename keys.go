@@ -40,7 +40,8 @@ type KeyMap struct {
 
 	// Mutation (normal mode + focusList)
 	Rename,
-	Delete key.Binding
+	Delete,
+	OpenInEditor key.Binding // e — open the selected file in $VISUAL/$EDITOR (prd-open-in-editor)
 
 	// Modes
 	FocusToggle    key.Binding // Tab — focusList ↔ focusPreview (prd-pane-focus)
@@ -83,8 +84,9 @@ func defaultKeyMap() KeyMap {
 		PreviewToggleWrap:       key.NewBinding(key.WithKeys("w"), key.WithHelp("w", "toggle wrap")),
 		ToggleDiff:              key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "toggle diff")),
 
-		Rename: key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "rename")),
-		Delete: key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete")),
+		Rename:       key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "rename")),
+		Delete:       key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete")),
+		OpenInEditor: key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "open in editor")),
 
 		FocusToggle:    key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "switch focus")),
 		Search:         key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")),

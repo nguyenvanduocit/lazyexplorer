@@ -187,6 +187,90 @@ func TestCommandCdRejects(t *testing.T) {
 	}
 }
 
+// TestCommandOpenInEditor drives the palette command's Run closure directly — the
+// discoverability twin of the `e` key (PRD D9) is a SECOND entry point that duplicates
+// the keypath guard, so each of its branches needs its own coverage (a future fix to
+// the key guard could miss this copy). Mirrors TestCommandCdRejects: pull the Command
+// from defaultCommands() and call Run, asserting cmd-nilness + status per branch.
+func TestCommandOpenInEditor(t *testing.T) {
+	t.Setenv("VISUAL", "")
+	t.Setenv("EDITOR", "vim") // a runnable editor so the only nil-cmd cause is the guard
+
+	var openCmd Command
+	for _, c := range defaultCommands() {
+		if c.Name == "open in editor" {
+			openCmd = c
+		}
+	}
+	if openCmd.Run == nil {
+		t.Fatal(`"open in editor" command not found in defaultCommands()`)
+	}
+
+	t.Run("real file returns an exec cmd, no warning", func(t *testing.T) {
+		m := editorModel(t) // cwd = sub/, holds child/ + main.go + synthetic ..
+		selectEntry(t, &m, "main.go")
+		cmd := openCmd.Run(&m, "")
+		if cmd == nil {
+			t.Errorf("file: Run returned nil cmd, want a tea.ExecProcess cmd")
+		}
+		if strings.HasPrefix(m.statusMsg, "⚠") {
+			t.Errorf("file: Run set a warning status %q, want none", m.statusMsg)
+		}
+	})
+
+	t.Run("directory is refused", func(t *testing.T) {
+		m := editorModel(t)
+		selectEntry(t, &m, "child")
+		cmd := openCmd.Run(&m, "")
+		if cmd != nil {
+			t.Errorf("dir: Run returned a cmd, want nil")
+		}
+		if m.statusMsg != "⚠ not a file" {
+			t.Errorf("dir: status = %q, want %q", m.statusMsg, "⚠ not a file")
+		}
+	})
+
+	t.Run("synthetic .. is refused", func(t *testing.T) {
+		m := editorModel(t)
+		selectEntry(t, &m, "..")
+		cmd := openCmd.Run(&m, "")
+		if cmd != nil {
+			t.Errorf("..: Run returned a cmd, want nil")
+		}
+		if m.statusMsg != "⚠ not a file" {
+			t.Errorf("..: status = %q, want %q", m.statusMsg, "⚠ not a file")
+		}
+	})
+
+	t.Run("empty listing is refused", func(t *testing.T) {
+		m := modelAt(t, t.TempDir(), 100, 30) // empty dir, no synthetic .. at root
+		if len(m.entries) != 0 {
+			t.Fatalf("setup: expected empty listing, got %v", entryNames(m))
+		}
+		cmd := openCmd.Run(&m, "")
+		if cmd != nil {
+			t.Errorf("empty: Run returned a cmd, want nil")
+		}
+		if m.statusMsg != "⚠ nothing selected" {
+			t.Errorf("empty: status = %q, want %q", m.statusMsg, "⚠ nothing selected")
+		}
+	})
+
+	t.Run("no editor set surfaces a status, no exec", func(t *testing.T) {
+		t.Setenv("VISUAL", "")
+		t.Setenv("EDITOR", "")
+		m := editorModel(t)
+		selectEntry(t, &m, "main.go")
+		cmd := openCmd.Run(&m, "")
+		if cmd != nil {
+			t.Errorf("no-editor: Run returned a cmd, want nil")
+		}
+		if !strings.HasPrefix(m.statusMsg, "⚠") {
+			t.Errorf("no-editor: status = %q, want a ⚠ warning", m.statusMsg)
+		}
+	})
+}
+
 // TestCommandQuit: the quit command returns tea.Quit (yields tea.QuitMsg).
 func TestCommandQuit(t *testing.T) {
 	m := modelAt(t, t.TempDir(), 100, 30)

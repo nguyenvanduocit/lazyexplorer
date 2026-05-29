@@ -393,34 +393,38 @@ func t5NewFileAppears(t *testing.T) {
 // in the shell. Possible?
 // ----------------------------------------------------------------------------
 func t6OpenInEditorOrReveal(t *testing.T) {
+	// $EDITOR must be set for the capability to be wired — exactly the beside-an-agent
+	// norm (prd-open-in-editor D1). Pin it so the measurement is deterministic; never
+	// run the returned cmd (it would suspend the test and spawn $EDITOR in CI).
+	t.Setenv("VISUAL", "")
+	t.Setenv("EDITOR", "vim")
+
 	m := searchModel(t)
 	moveCursorToAny(t, &m, "main.go")
 
-	// A user reaches for the command palette to "open in editor". Drive it and
-	// read every command — the full set is the evidence.
+	// Path 1 — the command palette offers "open in editor" (discoverability twin).
 	keys := 0
-	m = dogPress(t, m, keyCtrl('p'))
+	mp := dogPress(t, m, keyCtrl('p'))
 	keys++
-	if m.mode != modeCommandPalette {
-		t.Fatalf("T6 setup: ctrl+p did not open the palette (mode=%v)", m.mode)
+	if mp.mode != modeCommandPalette {
+		t.Fatalf("T6 setup: ctrl+p did not open the palette (mode=%v)", mp.mode)
 	}
-	paletteView := seeContent(m)
+	paletteView := seeContent(mp)
 	cmds := paletteCommandNames()
-	hasEditor := strings.Contains(paletteView, "editor") || strings.Contains(paletteView, "open in")
-	hasReveal := strings.Contains(paletteView, "reveal") || strings.Contains(paletteView, "open in shell")
+	hasEditor := strings.Contains(paletteView, "open in editor")
 
-	// Also probe the normal-mode keymap: 'o'/'e' are unbound (no editor/reveal).
-	m = dogPress(t, m, keyEsc()) // close palette
-	mO := dogPress(t, m, keyRune('o'))
-	mE := dogPress(t, m, keyRune('e'))
-	// 'o'/'e' do nothing in normal mode (not in the keymap) — mode stays normal,
-	// cursor unmoved. We only note that they are no-ops.
-	oNoop := mO.mode == modeNormal && mO.cursor == m.cursor
-	eNoop := mE.mode == modeNormal && mE.cursor == m.cursor
+	// Path 2 — the primary key. Press 'e' on a file (focusList) and capture the
+	// returned cmd WITHOUT running it: a non-nil cmd is the capability being present
+	// (it is the tea.ExecProcess that suspends the TUI and launches $EDITOR).
+	var em tea.Model = m
+	em, eCmd := em.Update(keyRune('e'))
+	keys++
+	eFile := em.(model)
+	keyWired := eCmd != nil && eFile.mode == modeNormal && !strings.HasPrefix(eFile.statusMsg, "⚠")
 
-	t.Logf("[T6 open-in-editor/reveal] achievable=%v keystrokes=%d (tried before concluding impossible)", false, keys)
-	t.Logf("[T6] friction: no open-in-$EDITOR and no reveal-in-shell — the palette offers only reload/copy-path/cd/quit; the only spawn capability (split.go) opens ANOTHER lazyexplorer pane, not an editor")
-	t.Logf("[T6] evidence: palette commands=%v (editor cmd=%v, reveal cmd=%v); normal-mode 'o' no-op=%v, 'e' no-op=%v", cmds, hasEditor, hasReveal, oNoop, eNoop)
+	t.Logf("[T6 open-in-editor] achievable=%v keystrokes=%d (1 key: press e on the selected file; the palette twin is the alt path)", keyWired, keys)
+	t.Logf("[T6] capability: pressing 'e' on a file returns a tea.ExecProcess cmd that suspends the TUI into $VISUAL/$EDITOR and reloads on exit (editorFinishedMsg); reveal-in-shell stays deferred (prd-open-in-editor §non-goal)")
+	t.Logf("[T6] evidence: palette commands=%v (open-in-editor cmd=%v); 'e' on a file returned a cmd=%v, mode stayed normal=%v, no warning status=%v", cmds, hasEditor, eCmd != nil, eFile.mode == modeNormal, !strings.HasPrefix(eFile.statusMsg, "⚠"))
 }
 
 // ----------------------------------------------------------------------------

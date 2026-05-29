@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	tea "charm.land/bubbletea/v2"
 )
 
 // TestDumpFrames is the Level-4 (UI / visual) harness: it writes raw-ANSI frames
@@ -117,6 +119,83 @@ func TestDumpPaletteModalFrame(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(outDir, f.name+".ansi"), []byte(m.View().Content), 0o644); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// TestDumpOpenInEditorFrames is the visual-verdict harness for
+// docs/prd-open-in-editor.md §6 checklist 5. It writes three ANSI frames to
+// $LAZYEXPLORER_DUMP_DIR for freeze → PNG → agent verdict:
+//
+//	fullhelp-mutation-90x32 — the `?` overlay scrolled to the Mutation group,
+//	                    the CANONICAL visible reference: it must render
+//	                    rename · delete · open in editor, the new `e` row
+//	                    aligned with its siblings.
+//	footer-90x24      — the file list focused. `e` lives in the footer keyhint's
+//	                    binding source (shortHelp), but at 90 cols the trailing
+//	                    hints clip — as ctrl+p/?/q already do pre-this-change.
+//	                    The complete, always-visible reference is the `?` overlay
+//	                    above; this frame just confirms the footer still reads
+//	                    cleanly and nothing earlier in it broke.
+//	no-editor-90x24   — pressing e with no $VISUAL/$EDITOR shows the
+//	                    "⚠ set $VISUAL or $EDITOR …" status, no exec.
+//
+// Run with:
+//
+//	LAZYEXPLORER_DUMP_DIR=/tmp/le-editor go test -run TestDumpOpenInEditorFrames .
+func TestDumpOpenInEditorFrames(t *testing.T) {
+	outDir := os.Getenv("LAZYEXPLORER_DUMP_DIR")
+	if outDir == "" {
+		t.Skip("set LAZYEXPLORER_DUMP_DIR to dump View() frames for visual verdict")
+	}
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	for _, name := range []string{"main.go", "model.go", "README.md"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("package main\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Full-help overlay scrolled so the Mutation group (rename · delete · open in
+	// editor) is in the modal's visible window — the new `e` row shown in context.
+	mHelp := modelAt(t, dir, 90, 32)
+	mHelp.renderStyle = "dark"
+	mHelp.enterHelp()
+	// Scroll so the Mutation group (index 2) sits at the top of the modal window.
+	// renderHelpBody emits, per group, one title line + one row per binding + one
+	// blank separator — so the Mutation group's first line is the summed height of
+	// Navigation (group 0) and Preview (group 1). Computed from fullHelp() so it
+	// stays correct if a group gains/loses a binding.
+	groups := mHelp.fullHelp()
+	mutationTop := 0
+	for gi := 0; gi < 2; gi++ {
+		mutationTop += 1 + len(groups[gi]) + 1
+	}
+	mHelp.helpTop = mutationTop
+	if err := os.WriteFile(filepath.Join(outDir, "fullhelp-mutation-90x32.ansi"), []byte(mHelp.View().Content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Footer: list focused, cursor on a file — confirms the footer still reads
+	// cleanly (the `e` hint clips at 90 cols, like ctrl+p/?/q already did).
+	mFooter := modelAt(t, dir, 90, 24)
+	mFooter.renderStyle = "dark"
+	if err := os.WriteFile(filepath.Join(outDir, "footer-90x24.ansi"), []byte(mFooter.View().Content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// No-editor status: press e with both env unset (no exec, just the warning).
+	t.Setenv("VISUAL", "")
+	t.Setenv("EDITOR", "")
+	mStatus := modelAt(t, dir, 90, 24)
+	mStatus.renderStyle = "dark"
+	var tm tea.Model = mStatus
+	tm, _ = tm.Update(tea.KeyPressMsg{Code: 'e', Text: "e"})
+	mStatus = tm.(model)
+	if err := os.WriteFile(filepath.Join(outDir, "no-editor-90x24.ansi"), []byte(mStatus.View().Content), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 

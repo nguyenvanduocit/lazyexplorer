@@ -90,7 +90,7 @@ func printHelp() {
 	fmt.Println("  --help                print this help and exit")
 	fmt.Println()
 	fmt.Println("Keys: q/ctrl+c quit · j/k or ↑↓ move · l/enter open · h/← up")
-	fmt.Println("      d delete · r rename · J/ctrl+d page-down · K/ctrl+u page-up")
+	fmt.Println("      d delete · r rename · e open in editor · J/ctrl+d page-down · K/ctrl+u page-up")
 	fmt.Println()
 	fmt.Println("Telemetry (opt-in): LE_TELEMETRY=1 DD_API_KEY=… — see README.md.")
 }
