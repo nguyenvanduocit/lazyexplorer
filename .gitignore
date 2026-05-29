@@ -28,3 +28,10 @@ dist/
 # User-local Claude Code config (skills, settings) — lives on the developer's machine,
 # not in the public repo. AGENTS.md (GitNexus index, project-relevant) is committed.
 .claude/
+
+# Spec Kit scaffold from `specify init` — a tooling workspace, not part of the app.
+my-project/
+
+# External Claude Code skills dropped under .github/skills/ — tooling on the
+# developer's machine, not app code. .github/workflows/ stays committed.
+.github/skills/
