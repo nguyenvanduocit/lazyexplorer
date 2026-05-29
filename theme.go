@@ -1,6 +1,10 @@
 package main
 
-import "charm.land/lipgloss/v2"
+import (
+	"image/color"
+
+	"charm.land/lipgloss/v2"
+)
 
 // codeHighlightStyle is the chroma style name for source syntax highlighting (see
 // chroma/styles). Dark, to match the app palette. The renderer clears each token's
@@ -13,10 +17,30 @@ var (
 	colAccent = lipgloss.Color("#7D56F4") // active panel border, cursor
 	colDir    = lipgloss.Color("#56B6F4") // folders
 	colDim    = lipgloss.Color("#6C757D") // muted text, inactive borders
-	colDanger = lipgloss.Color("#DC3545") // delete confirm
-	colWarn   = lipgloss.Color("#FFC107") // rename
+	colDanger = lipgloss.Color("#DC3545") // delete confirm; git deleted/conflict badge; "-N" delta
+	colWarn   = lipgloss.Color("#FFC107") // rename; git modified/renamed badge
 	colFg     = lipgloss.Color("#E6E6E6")
 	colSelFg  = lipgloss.Color("#FFFFFF")
+	colGitNew = lipgloss.Color("#3FB950") // git new/untracked/added badge + "+N" delta (github green)
+)
+
+// gitColor maps a git change code to its badge foreground (PRD prd-git-change-indicator D12).
+// One accent per status family: new→green, modified/rename→amber, delete/conflict→red.
+func gitColor(c gitCode) color.Color {
+	switch c {
+	case gitUntracked, gitAdded:
+		return colGitNew
+	case gitDeleted, gitConflict:
+		return colDanger
+	default: // gitModified, gitRenamed
+		return colWarn
+	}
+}
+
+// Diffstat delta token styles: "+N" green, "-N" red — git's own convention (D12).
+var (
+	gitAddStyle = lipgloss.NewStyle().Foreground(colGitNew)
+	gitDelStyle = lipgloss.NewStyle().Foreground(colDanger)
 )
 
 var (
