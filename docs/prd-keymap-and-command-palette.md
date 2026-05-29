@@ -144,7 +144,7 @@ Refactor keybind từ inline switch + hardcoded hint sang `bubbles/v2 key.Bindin
 | D4 | Activation key cho FullHelp overlay | **`?`** | Vim/man-page/lazygit/glow convention. Không đụng key đang dùng (`model.go:737-781` không có `?`). |
 | D5 | Modes mới | `modeCommandPalette`, `modeHelp` — orthogonal với focusPane | Cùng discipline `prd-pane-focus.md` D1: mode-prompt-style cho UI overlay tạm. |
 | D6 | Clipboard | **Shell out** — `pbcopy` (darwin) / `xclip -selection clipboard` (linux) / `wl-copy` (wayland) — không thêm dep | Một Go lib clipboard cần CGo (`github.com/atotto/clipboard` good but pulls X11 deps trên linux); shell-out đơn giản, fail-soft (clipboard không có → status warn, không crash), test-friendly. |
-| D7 | Palette commands v1 | `reload` · `copy path` · `cd <path>` · `quit` | 4 lệnh có pain point thật hôm nay (xem §1.3); KHÔNG bao gồm `rename`/`delete` (high-frequency, ở lane phím trực tiếp); KHÔNG bao gồm `toggle hidden` (lazyexplorer luôn show hidden — `fs.go:37` comment). |
+| D7 | Palette commands v1 | `reload` · `copy absolute path` · `cd <path>` · `quit` | 4 lệnh có pain point thật hôm nay (xem §1.3); KHÔNG bao gồm `rename`/`delete` (high-frequency, ở lane phím trực tiếp); KHÔNG bao gồm `toggle hidden` (lazyexplorer luôn show hidden — `fs.go:37` comment). |
 | D8 | Palette filter algorithm | **Substring case-insensitive** trên command Name | sahilm/fuzzy chỉ make sense khi >100 items; 4-10 commands → substring đủ; KHÔNG kéo dep mới cho v1. Nếu `prd-search.md` ship trước, palette CÓ THỂ reuse `fuzzy.Find` (defer optional optimization). |
 | D9 | Palette UI | **Floating modal** căn giữa màn hình (crush-style): box **chỉ viền rounded accent** (no background fill — interior khớp nền terminal, nổi sạch trên panes), `Commands` title + đường `╱` gradient (accent→dim) + input `›` ở **đỉnh box**, filtered list muted bên dưới (cursor row = full-width accent bar); box composite đè lên nền (list + divider + preview thật) qua `lipgloss.Canvas`/`Compositor`/`Layer`. | Box nổi căn giữa + title/input-at-top là mental model Spotlight/Raycast user đã quen; nền (tree + preview) vẫn đọc được phía sau box → glance-friendly. Border-only (no fill) khớp crush `Dialog.View = base.Border(RoundedBorder).BorderForeground(primary)` (`tmp/crush/internal/ui/styles/quickstyle.go:846`) — nền terminal lộ qua interior nên không có panel đặc đọc thành "frame" thứ hai. lipgloss v2 (`v2.0.3`, đã trong `go.mod`) sẵn có Canvas/Compositor/Layer — cùng primitive crush dùng nhưng wrapper cấp cao hơn nên giữ được pattern string-based `tea.NewView(content)`. |
 | D10 | Help overlay UI | Same as D9: **floating modal** căn giữa, body là bảng binding nhóm theo chủ đề, scrollable qua `j/k`. | Một cơ chế overlay cho cả palette lẫn help → nhất quán; nền list + preview vẫn hiện sau box. |
@@ -217,7 +217,7 @@ Refactor keybind từ inline switch + hardcoded hint sang `bubbles/v2 key.Bindin
 - **FR8** — Command `reload`: gọi `m.reload()` (`model.go:125`); status
   message `reloaded N items`. Mode về `modeNormal`.
 
-- **FR9** — Command `copy path`: lấy abs path của entry đang select (`m.cwd +
+- **FR9** — Command `copy absolute path`: lấy abs path của entry đang select (`m.cwd +
   m.entries[m.cursor].name`); shell-out clipboard (D6):
   ```
   darwin  → pbcopy
@@ -226,7 +226,7 @@ Refactor keybind từ inline switch + hardcoded hint sang `bubbles/v2 key.Bindin
   ```
   Status: `copied <path>` hoặc `⚠ clipboard error: <err>`. Mode về `modeNormal`.
   **Synthetic `..`**: khi cursor ở entry `..` (parent shortcut, `model.go` reload
-  prepend), `copy path` copy abs path của **parent đã resolve** (`filepath.Dir(m.cwd)`,
+  prepend), `copy absolute path` copy abs path của **parent đã resolve** (`filepath.Dir(m.cwd)`,
   jail-clamped tại root) — không phải chuỗi literal `<cwd>/..`. Cursor trên list rỗng
   → status `⚠ nothing selected`.
 
@@ -582,7 +582,7 @@ func defaultCommands() []Command {
             },
         },
         {
-            Name: "copy path", Description: "copy selected entry's absolute path to clipboard",
+            Name: "copy absolute path", Description: "copy selected entry's absolute path to clipboard",
             Run: func(m *model, _ string) tea.Cmd {
                 if len(m.entries) == 0 {
                     m.statusMsg = "⚠ nothing selected"
@@ -1374,13 +1374,13 @@ Feature: Keymap registry & command palette
 
   Scenario: Copy path puts the selected entry's absolute path on the clipboard
     Given the cursor is on a file named "main.go" at the project root
-    When I open the command palette and run "copy path"
+    When I open the command palette and run "copy absolute path"
     Then the clipboard contains the absolute path to "main.go"
     And the status bar shows "copied <abs path>"
 
   Scenario: Copy path on a platform without a supported clipboard reports an error
     Given the host has no pbcopy/xclip/wl-copy available
-    When I open the command palette and run "copy path"
+    When I open the command palette and run "copy absolute path"
     Then the status bar shows a clipboard error
     And the explorer state is otherwise unchanged
 
@@ -1402,7 +1402,7 @@ Feature: Keymap registry & command palette
 
 1. `./lazyexplorer .` → status bar hiện hint từ KeyMap (không phải hardcoded
    string); verify bằng `rg '"\[↑↓/jk/click\]"' view.go` trả **0 hit**.
-2. `Ctrl+P` mở palette; 4 commands hiển thị: `reload`, `copy path`, `cd`,
+2. `Ctrl+P` mở palette; commands hiển thị gồm `reload`, `copy absolute path`, `cd`,
    `quit`. Cursor ở row 0.
 3. Gõ `cd` → list filter còn `cd`. Gõ `xyz` → list rỗng, dòng `(no matching
    commands)` hiện.
@@ -1417,7 +1417,7 @@ Feature: Keymap registry & command palette
    để `m.reload()` gọi readDir trên file rồi set entries=nil).
 8. Trong cd stage, gõ `~/.config` Enter (with `~` expand to `$HOME`) → jail
    block (vì home ngoài root v.v.); box hiện error dưới prompt.
-8b. Cursor trên synthetic `..`, palette → `copy path` Enter → clipboard chứa abs
+8b. Cursor trên synthetic `..`, palette → `copy absolute path` Enter → clipboard chứa abs
    path của **parent đã resolve** (jail-clamped tại root), KHÔNG phải literal
    `<cwd>/..` (FR9).
 9. Backspace ở palette query rỗng → palette đóng.
@@ -1429,7 +1429,7 @@ Feature: Keymap registry & command palette
 14. `q` trong help → đóng help (KHÔNG quit app — surprise avoidance).
 15. `q` trong palette stage 1 (đang gõ command name) → KHÔNG quit; ký tự `q`
     được append vào query.
-16. Copy path: select `main.go`, palette → `copy path` Enter → `pbcopy < main.go
+16. Copy path: select `main.go`, palette → `copy absolute path` Enter → `pbcopy < main.go
     abs path` (verify: `pbpaste` trên macOS in ra path).
 17. Linux không có xclip/wl-copy → status `⚠ clipboard: no xclip or wl-copy in
     PATH`, không crash.
@@ -1470,7 +1470,7 @@ Feature: Keymap registry & command palette
   (§5.3); focus-routed branches preserved, cross-ref comments kept. *(model.go)* ✅
 - [x] **T4 — Mode enum + state.** `modeCommandPalette`, `modeHelp`; palette +
   help fields on model; `keymap` set in newModel. *(model.go)* ✅
-- [x] **T5 — `commands.go`.** `Command` + `defaultCommands()` (reload/copy path/cd/
+- [x] **T5 — `commands.go`.** `Command` + `defaultCommands()` (reload/copy absolute path/cd/
   quit) + `writeClipboard` + `resolvePath` + `selectedAbsPath` (".." jail-clamp). *(commands.go)* ✅
 - [x] **T6 — Palette handler.** `updateCommandPalette` (two-stage) +
   `enterCommandPalette`/`exitCommandPalette`/`applyPaletteFilter` in `palette.go`;

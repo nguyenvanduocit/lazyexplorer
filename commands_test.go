@@ -82,3 +82,30 @@ func TestEditorCommand(t *testing.T) {
 		})
 	}
 }
+
+// TestRelRoot is the driver for the pure rel-path builder — the only
+// unit-inspectable surface of yank (writeClipboard is opaque + fails in CI with no
+// pbcopy/xclip, so the rel string MUST be computed by a function tested
+// independently of the clipboard side effect). Mirrors TestEditorCommand's table
+// discipline. ToSlash on every case proves slash-form on all OSes (Windows path
+// separators would otherwise leak into the agent chat).
+func TestRelRoot(t *testing.T) {
+	const root = "/proj"
+	cases := []struct {
+		name string
+		abs  string
+		want string
+	}{
+		{name: "file at root", abs: "/proj/foo.go", want: "foo.go"},
+		{name: "nested file is slash-form", abs: "/proj/a/b/c.go", want: "a/b/c.go"},
+		{name: "a directory under root", abs: "/proj/sub", want: "sub"},
+		{name: "root itself resolves to dot (dispatch then refuses)", abs: "/proj", want: "."},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := relRoot(root, c.abs); got != c.want {
+				t.Errorf("relRoot(%q, %q) = %q, want %q", root, c.abs, got, c.want)
+			}
+		})
+	}
+}

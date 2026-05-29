@@ -68,7 +68,7 @@ func defaultCommands() []Command {
 			},
 		},
 		{
-			Name: "copy path", Description: "copy the selected entry's absolute path",
+			Name: "copy absolute path", Description: "copy the selected entry's absolute path",
 			Run: func(m *model, _ string) tea.Cmd {
 				if len(m.entries) == 0 {
 					m.statusMsg = "⚠ nothing selected"
@@ -80,6 +80,18 @@ func defaultCommands() []Command {
 					return nil
 				}
 				m.statusMsg = "copied " + full
+				return nil
+			},
+		},
+		{
+			Name: "copy relative path", Description: "copy the selected entry's path relative to the root",
+			// Discoverability twin of the `y` key: BOTH route through yankRelPath, the
+			// single code path that guards, computes the slash-form rel, copies, and
+			// records action.yank_rel exactly once (prd-yank-relative-path D7) — a split
+			// twin would double-record. This is the path the agent chat actually wants;
+			// "copy absolute path" stays for the rarer absolute case.
+			Run: func(m *model, _ string) tea.Cmd {
+				m.yankRelPath()
 				return nil
 			},
 		},
@@ -141,6 +153,23 @@ func defaultCommands() []Command {
 			Run: func(_ *model, _ string) tea.Cmd { return tea.Quit },
 		},
 	}
+}
+
+// relRoot returns abs expressed RELATIVE to root, in slash-form — the shape that
+// pastes straight into the agent's chat (it expects "src/auth.go", not the
+// machine-absolute "/Users/…/proj/src/auth.go" the user would otherwise hand-trim).
+// filepath.ToSlash normalizes the OS separator so a Windows backslash never leaks
+// into the chat. Defensive: an under-root abs (the only input the dispatch ever
+// passes — selectedAbsPath is jail-clamped) cannot error; on the impossible Rel
+// error we return abs unchanged rather than an empty/garbage string. This is a PURE
+// builder, tested independently of writeClipboard (TestRelRoot) — the clipboard
+// helper fails in CI, so the rel string's correctness must be provable without it.
+func relRoot(root, abs string) string {
+	rel, err := filepath.Rel(root, abs)
+	if err != nil {
+		return abs
+	}
+	return filepath.ToSlash(rel)
 }
 
 // selectedAbsPath returns the absolute path of the entry under the cursor. The

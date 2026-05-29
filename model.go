@@ -1445,6 +1445,33 @@ func (m *model) previewClick(y int, g geometry) {
 	m.refreshPreview()
 }
 
+// yankRelPath copies the selection's project-relative slash-path to the clipboard
+// — the ONE code path shared by the `y` key and the palette twin (prd-yank-relative-path
+// D7), so the telemetry below records exactly once per yank no matter the entry
+// point (a split twin would double-count). Guards mirror the e/r/d cluster: empty
+// listing → nothing selected; the synthetic ".." resolves to the parent dir whose
+// rel is "." (or a sibling subdir) — yanking the parent into agent chat is not the
+// use case, so we refuse it like open-in-editor refuses ".." (D4). A REAL directory
+// IS yankable (unlike open-in-editor): pasting a dir path into the agent is valid.
+// No tea.Cmd: writeClipboard is synchronous and fast (a one-shot pipe to pbcopy).
+func (m *model) yankRelPath() {
+	if len(m.entries) == 0 {
+		m.statusMsg = "⚠ nothing selected"
+		return
+	}
+	if m.entries[m.cursor].name == ".." {
+		m.statusMsg = "⚠ nothing to yank"
+		return
+	}
+	rel := relRoot(m.root, m.selectedAbsPath())
+	m.tel.Record("action.yank_rel", map[string]any{"rel": rel})
+	if err := writeClipboard(rel); err != nil {
+		m.statusMsg = "⚠ clipboard: " + err.Error()
+		return
+	}
+	m.statusMsg = "copied " + rel
+}
+
 func (m model) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	km := m.keymap
 
@@ -1600,6 +1627,16 @@ func (m model) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.tel.Record("action.open_editor", map[string]any{"name": sel.name})
 		m.statusMsg = ""
 		return m, tea.ExecProcess(cmd, func(err error) tea.Msg { return editorFinishedMsg{err} })
+
+	// y copies the selection's project-relative slash-path to the clipboard so it
+	// pastes straight into the agent's chat — no hand-trimming the repo prefix
+	// (prd-yank-relative-path D3). focusList-only (mirrors the e/r/d selection-acting
+	// cluster): the rel path is meaningful only against a list selection. yankRelPath
+	// is the shared code path with the palette twin (records telemetry once).
+	case key.Matches(msg, km.Yank):
+		if m.focusPane == focusList {
+			m.yankRelPath()
+		}
 
 	// Search is a mode switch, not a list mutation — fires regardless of focusPane.
 	// enterSearch snapshots state (for Esc restore) and returns a walk Cmd on a

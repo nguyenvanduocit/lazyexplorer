@@ -51,6 +51,7 @@ type KeyMap struct {
 	Back           key.Binding // esc — focusPreview→list / palette close / help close
 
 	// Misc
+	Yank key.Binding // y — copy the selection's project-relative path (prd-yank-relative-path)
 	Quit key.Binding
 }
 
@@ -94,6 +95,7 @@ func defaultKeyMap() KeyMap {
 		FullHelp:       key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 		Back:           key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 
+		Yank: key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "yank rel path")),
 		Quit: key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
 	}
 }

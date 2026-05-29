@@ -188,7 +188,7 @@ func t1FindChangedFile(t *testing.T) {
 
 // ----------------------------------------------------------------------------
 // T2 — copy-path: copy the selected file's PROJECT-RELATIVE path so you can
-// paste it into the agent's chat. Possible at all?
+// paste it straight into the agent's chat. Now a 1-keystroke yank.
 // ----------------------------------------------------------------------------
 func t2CopyPath(t *testing.T) {
 	m := searchModel(t) // small tree; cursor lands on a real file
@@ -196,37 +196,42 @@ func t2CopyPath(t *testing.T) {
 	moveCursorToAny(t, &m, "main.go")
 	wantAbs := m.selectedAbsPath()
 
-	// The user's path: ctrl+p (open palette) → type "copy" to filter → enter.
+	// The user's path: press `y` on the selected file (one keystroke — beats the
+	// 6-keystroke palette path the absolute-copy command takes).
 	keys := 0
-	m = dogPress(t, m, keyCtrl('p'))
-	keys++
-	if m.mode != modeCommandPalette {
-		t.Fatalf("T2 setup: ctrl+p did not open the palette (mode=%v)", m.mode)
-	}
-	for _, r := range "copy" { // narrow to the "copy path" command
-		m = dogPress(t, m, keyRune(r))
-		keys++
-	}
-	// The filtered palette should now show exactly "copy path".
-	paletteView := seeContent(m)
-	hasCopyCmd := strings.Contains(paletteView, "copy path")
-	m = dogPress(t, m, keyEnter()) // run it
+	m = dogPress(t, m, keyRune('y'))
 	keys++
 
-	// Outcome: the command ran (statusMsg is "copied <path>" on success, or a
+	// Outcome: the yank ran (statusMsg is "copied <rel>" on success, or a
 	// "⚠ clipboard:" message if no pbcopy/xclip/wl-copy is available — both are
 	// valid dogfood data; do NOT fail on the clipboard outcome).
 	copied := strings.HasPrefix(m.statusMsg, "copied ")
 	clipFail := strings.HasPrefix(m.statusMsg, "⚠ clipboard")
-	// The crux: the command copies the ABSOLUTE path. The stated goal is the
-	// PROJECT-RELATIVE path. So the literal goal is NOT reachable — the user must
-	// hand-trim the repo prefix before pasting into the agent chat.
-	emitsAbsolute := strings.HasPrefix(wantAbs, m.root)
-	rel := strings.TrimPrefix(strings.TrimPrefix(wantAbs, m.root), "/")
+	if !copied && !clipFail {
+		t.Fatalf("[T2] `y` produced neither a copied-rel nor a clipboard status: %q", m.statusMsg)
+	}
+	// RESOLVED: the goal — a project-relative slash-path — is now reachable. The
+	// rel string is filepath.Rel(root, abs) in slash-form, with the repo prefix
+	// gone, so it pastes straight into the agent (no hand-trimming). Positive
+	// assertion (this is a logging bookend; it won't fail on its own otherwise).
+	wantRel, relErr := filepath.Rel(m.root, wantAbs)
+	if relErr != nil {
+		t.Fatalf("[T2] filepath.Rel(%q, %q): %v", m.root, wantAbs, relErr)
+	}
+	wantRel = filepath.ToSlash(wantRel)
+	if copied {
+		gotRel := strings.TrimPrefix(m.statusMsg, "copied ")
+		if gotRel != wantRel {
+			t.Errorf("[T2] yanked rel = %q, want %q (filepath.Rel sans root prefix)", gotRel, wantRel)
+		}
+		if strings.HasPrefix(gotRel, m.root) {
+			t.Errorf("[T2] yanked rel %q still carries the %q prefix the user used to hand-trim", gotRel, m.root)
+		}
+	}
 
-	t.Logf("[T2 copy-path] achievable=%v keystrokes=%d (a copy command exists, but it emits the ABSOLUTE path)", false, keys)
-	t.Logf("[T2] friction: 'copy path' (ctrl+p→copy→enter, %d keys) copies the absolute path; there is no project-relative option, so you hand-trim the %q prefix before pasting into the agent (it expects %q)", keys, m.root, rel)
-	t.Logf("[T2] evidence: palette shows 'copy path' cmd=%v; ran with statusMsg=%q (copied=%v clipboardUnsupported=%v); emits absolute path under root=%v", hasCopyCmd, m.statusMsg, copied, clipFail, emitsAbsolute)
+	t.Logf("[T2 copy-path] achievable=%v keystrokes=%d (press `y` on the file — copies the project-relative slash-path; the palette 'copy relative path' twin is the alt path)", copied || clipFail, keys)
+	t.Logf("[T2] resolved: `y` copies the path relative to the jail root (it expects %q), so it pastes straight into the agent — no hand-trimming the %q prefix; 'copy absolute path' stays for the rarer absolute case", wantRel, m.root)
+	t.Logf("[T2] evidence: ran `y` with statusMsg=%q (copied=%v clipboardUnsupported=%v); rel == filepath.Rel(root, abs) slash-form = %q", m.statusMsg, copied, clipFail, wantRel)
 }
 
 // ----------------------------------------------------------------------------

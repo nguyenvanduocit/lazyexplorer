@@ -8,6 +8,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -426,11 +427,71 @@ func TestPaletteBodyRenders(t *testing.T) {
 	if !strings.Contains(rows[1], "›") {
 		t.Errorf("palette body row 1 should be the '›' input prompt; got %q", rows[1])
 	}
-	for _, name := range []string{"reload", "copy path", "cd", "quit"} {
+	for _, name := range []string{"reload", "copy absolute path", "copy relative path", "open in editor", "cd", "quit"} {
 		if !strings.Contains(body, name) {
 			t.Errorf("palette body should list command %q; full:\n%s", name, body)
 		}
 	}
+}
+
+// TestCommandCopyRelative drives the palette twin's Run closure directly — the
+// discoverability sibling of the `y` key (PRD D7). Both route through the SAME
+// yankRelPath helper, so this asserts the relative-path outcome (clipboard-agnostic,
+// T2 discipline) and proves the embedded rel string carries NO m.root prefix.
+func TestCommandCopyRelative(t *testing.T) {
+	var relCmd Command
+	for _, c := range defaultCommands() {
+		if c.Name == "copy relative path" {
+			relCmd = c
+		}
+	}
+	if relCmd.Run == nil {
+		t.Fatal(`"copy relative path" command not found in defaultCommands()`)
+	}
+
+	t.Run("real file copies a project-relative slash-path", func(t *testing.T) {
+		m := editorModel(t) // cwd = <root>/sub, holds main.go
+		selectEntry(t, &m, "main.go")
+		cmd := relCmd.Run(&m, "")
+		if cmd != nil {
+			t.Errorf("copy relative: Run returned a cmd, want nil")
+		}
+		copied := strings.HasPrefix(m.statusMsg, "copied ")
+		clipFail := strings.HasPrefix(m.statusMsg, "⚠ clipboard")
+		if !copied && !clipFail {
+			t.Fatalf("status = %q, want a 'copied <rel>' or '⚠ clipboard…' outcome", m.statusMsg)
+		}
+		if copied {
+			rel := strings.TrimPrefix(m.statusMsg, "copied ")
+			if strings.Contains(rel, m.root) {
+				t.Errorf("copied rel %q still carries the m.root prefix %q", rel, m.root)
+			}
+			if rel != filepath.ToSlash(filepath.Join("sub", "main.go")) {
+				t.Errorf("copied rel = %q, want %q", rel, filepath.ToSlash(filepath.Join("sub", "main.go")))
+			}
+		}
+	})
+
+	t.Run("empty listing is refused", func(t *testing.T) {
+		m := modelAt(t, t.TempDir(), 100, 30)
+		if len(m.entries) != 0 {
+			t.Fatalf("setup: expected empty listing, got %v", entryNames(m))
+		}
+		cmd := relCmd.Run(&m, "")
+		if cmd != nil {
+			t.Errorf("empty: Run returned a cmd, want nil")
+		}
+		if m.statusMsg != "⚠ nothing selected" {
+			t.Errorf("empty: status = %q, want %q", m.statusMsg, "⚠ nothing selected")
+		}
+	})
+
+	t.Run("the absolute twin is still offered alongside it", func(t *testing.T) {
+		names := commandNames(defaultCommands())
+		if !slices.Contains(names, "copy absolute path") {
+			t.Errorf("the absolute-path capability was dropped; commands = %v", names)
+		}
+	})
 }
 
 // TestHelpRendersInView: with help open, View() composites a floating modal —
