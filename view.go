@@ -995,7 +995,7 @@ func (m model) fullHelp() [][]key.Binding {
 	km := m.keymap
 	return [][]key.Binding{
 		{km.MoveUp, km.MoveDown, km.GoTop, km.GoBottom, km.OpenEntry, km.GoUp},
-		{km.PreviewScrollUp, km.PreviewScrollDown, km.PreviewHalfPageUp, km.PreviewHalfPageDown, km.PreviewJumpTop, km.PreviewJumpBottom, km.PreviewScrollLeft, km.PreviewScrollRight, km.PreviewHScrollHalfLeft, km.PreviewHScrollHalfRight, km.PreviewHScrollReset, km.PreviewToggleWrap},
+		{km.PreviewScrollUp, km.PreviewScrollDown, km.PreviewHalfPageUp, km.PreviewHalfPageDown, km.PreviewJumpTop, km.PreviewJumpBottom, km.PreviewScrollLeft, km.PreviewScrollRight, km.PreviewHScrollHalfLeft, km.PreviewHScrollHalfRight, km.PreviewHScrollReset, km.PreviewToggleWrap, km.ToggleDiff},
 		{km.Rename, km.Delete},
 		{km.FocusToggle, km.Search, km.CommandPalette, km.FullHelp, km.Back},
 		{km.Quit},

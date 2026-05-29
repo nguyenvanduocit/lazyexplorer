@@ -14,6 +14,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // ---------------------------------------------------------------------------
@@ -330,5 +333,311 @@ func TestCollectGitStateNoCommitRepo(t *testing.T) {
 	st, _ := collectGitState(root, nil)
 	if st.changes["fresh.go"].code != gitUntracked {
 		t.Errorf("fresh file in a no-commit repo must show untracked; changes=%v", st.changes)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// diffHunks — fetch + colorize the unified diff (prd-preview-diff-view T1/§5.1)
+// ---------------------------------------------------------------------------
+
+// styledWith reports whether the line carries the ANSI foreground that style
+// would render — i.e. diffHunks colored this line through the same diffLineStyle
+// the assertion expects. We probe by rendering a marker through the style and
+// checking the line opens with the same SGR prefix (escape up to the first 'm').
+func sgrPrefix(s string) string {
+	if i := strings.IndexByte(s, 'm'); i >= 0 && strings.HasPrefix(s, "\x1b[") {
+		return s[:i+1]
+	}
+	return ""
+}
+
+// TestDiffHunksColorizesByPrefix is the headline T1 contract: against a committed
+// baseline, diffHunks returns the unified diff with each line colored by its
+// leading char — '+' lines in colDiffAdd, '-' lines in colDiffDel, the '@@' hunk
+// header + 'diff --git'/'index'/'---'/'+++' headers + ' ' context lines in dimStyle
+// (D11). The leading +/-/space character is preserved (readable when color is lost).
+func TestDiffHunksColorizesByPrefix(t *testing.T) {
+	dir := t.TempDir()
+	gitExec(t, dir, "init")
+	mustWrite(t, dir, "f.txt", "alpha\nbeta\ngamma\n")
+	gitExec(t, dir, "add", "f.txt")
+	gitExec(t, dir, "commit", "-m", "init")
+	// One line removed (beta), one added (delta) — diff shows -beta +delta plus
+	// context lines (alpha, gamma) and the @@ hunk header.
+	mustWrite(t, dir, "f.txt", "alpha\ndelta\ngamma\n")
+
+	root := detectRepoRoot(dir)
+	lines, preStyled, err := diffHunks(root, "f.txt")
+	if err != nil {
+		t.Fatalf("diffHunks on a modified tracked file should succeed; err=%v", err)
+	}
+	if !preStyled {
+		t.Errorf("diff lines carry verbatim ANSI → preStyled must be true")
+	}
+	if len(lines) == 0 {
+		t.Fatal("diffHunks returned no lines for a real diff")
+	}
+
+	// Classify each line by its ansi-stripped leading char and assert color.
+	addPrefix := sgrPrefix(diffLineStyle('+').Render("x"))
+	delPrefix := sgrPrefix(diffLineStyle('-').Render("x"))
+	dimPrefix := sgrPrefix(dimStyle.Render("x"))
+
+	var sawAdd, sawDel, sawHunk, sawContext bool
+	for _, ln := range lines {
+		plain := ansi.Strip(ln)
+		if plain == "" {
+			continue
+		}
+		got := sgrPrefix(ln)
+		switch {
+		case strings.HasPrefix(plain, "@@"):
+			sawHunk = true
+			if got != dimPrefix {
+				t.Errorf("hunk header %q not dim-styled: sgr=%q want %q", plain, got, dimPrefix)
+			}
+		case strings.HasPrefix(plain, "+++") || strings.HasPrefix(plain, "---") ||
+			strings.HasPrefix(plain, "diff --git") || strings.HasPrefix(plain, "index "):
+			// File headers are dim too (default branch of diffLineStyle).
+			if got != dimPrefix {
+				t.Errorf("file header %q not dim-styled: sgr=%q want %q", plain, got, dimPrefix)
+			}
+		case plain[0] == '+':
+			sawAdd = true
+			if got != addPrefix {
+				t.Errorf("added line %q not add-styled: sgr=%q want %q", plain, got, addPrefix)
+			}
+			if !strings.Contains(plain, "delta") {
+				continue
+			}
+		case plain[0] == '-':
+			sawDel = true
+			if got != delPrefix {
+				t.Errorf("removed line %q not del-styled: sgr=%q want %q", plain, got, delPrefix)
+			}
+		case plain[0] == ' ':
+			sawContext = true
+			if got != dimPrefix {
+				t.Errorf("context line %q not dim-styled: sgr=%q want %q", plain, got, dimPrefix)
+			}
+		}
+	}
+	if !sawAdd || !sawDel || !sawHunk || !sawContext {
+		t.Errorf("diff must show an add, a del, a hunk header, and a context line; got add=%v del=%v hunk=%v context=%v",
+			sawAdd, sawDel, sawHunk, sawContext)
+	}
+}
+
+// TestDiffHunksReconcilesBadgeCount pins FR2/D7: the +/- line count in the diff
+// must equal the +N/-N the BADGE counts, because both compute against the same
+// HEAD-aware base. The fixture is DISCRIMINATING: one tracked file carries both a
+// STAGED hunk and a further UNSTAGED hunk, so `git diff HEAD` (HEAD-aware, what
+// numstat counts) and `git diff` (worktree-vs-index, the drift this guards
+// against) return DIFFERENT counts. The test then cross-checks the diff's own
+// +/- count against the model's badge numbers (gitChange.added/deleted from the
+// SAME collectGitState), so any drift off the HEAD base fails equality.
+func TestDiffHunksReconcilesBadgeCount(t *testing.T) {
+	dir := t.TempDir()
+	gitExec(t, dir, "init")
+	mustWrite(t, dir, "f.txt", "one\ntwo\nthree\n")
+	gitExec(t, dir, "add", "f.txt")
+	gitExec(t, dir, "commit", "-m", "init")
+
+	// Staged hunk: edit line 2, then `git add` it into the index.
+	mustWrite(t, dir, "f.txt", "one\nTWO\nthree\n")
+	gitExec(t, dir, "add", "f.txt")
+	// Further UNSTAGED hunk on the same file: append a line, leave it in the worktree.
+	mustWrite(t, dir, "f.txt", "one\nTWO\nthree\nfour\n")
+	// Now: `git diff HEAD`  → -two +TWO +four  (+2 -1) ← numstat / badge base
+	//      `git diff` (idx) → +four            (+1 -0) ← the off-HEAD drift to catch.
+
+	root := detectRepoRoot(dir)
+
+	// The badge's own numbers come straight from collectGitState's HEAD-aware numstat.
+	state, _ := collectGitState(root, nil)
+	chg, ok := state.changes["f.txt"]
+	if !ok || !chg.hasDelta {
+		t.Fatalf("badge state for f.txt missing/no-delta: %+v (ok=%v)", chg, ok)
+	}
+
+	lines, _, err := diffHunks(root, "f.txt")
+	if err != nil {
+		t.Fatalf("diffHunks err=%v", err)
+	}
+	adds, dels := 0, 0
+	for _, ln := range lines {
+		plain := ansi.Strip(ln)
+		if plain == "" {
+			continue
+		}
+		// Exclude the +++/--- file headers from the +/- content count.
+		if strings.HasPrefix(plain, "+++") || strings.HasPrefix(plain, "---") {
+			continue
+		}
+		switch plain[0] {
+		case '+':
+			adds++
+		case '-':
+			dels++
+		}
+	}
+	// numstat's added/deleted is line-for-line the diff's +/- count on the same
+	// base — equality pins both to HEAD. (Off-HEAD worktree-vs-index would give
+	// +1/-0, failing against the badge's +2/-1.)
+	if adds != chg.added || dels != chg.deleted {
+		t.Errorf("diff +/- count must reconcile with the badge (same HEAD base): diff +%d/-%d, badge +%d/-%d",
+			adds, dels, chg.added, chg.deleted)
+	}
+}
+
+// TestDiffHunksNoCommitUsesCached pins D7's fallback: a repo with NO commits has
+// no HEAD, so `git diff HEAD` aborts — diffHunks must fall back to `git diff
+// --cached` and still return the staged change as a diff.
+func TestDiffHunksNoCommitUsesCached(t *testing.T) {
+	dir := t.TempDir()
+	gitExec(t, dir, "init")
+	mustWrite(t, dir, "staged.txt", "first\nsecond\n")
+	gitExec(t, dir, "add", "staged.txt") // staged in a no-commit repo
+
+	root := detectRepoRoot(dir)
+	lines, _, err := diffHunks(root, "staged.txt")
+	if err != nil {
+		t.Fatalf("diffHunks must fall back to --cached in a no-commit repo; err=%v", err)
+	}
+	joined := ansi.Strip(strings.Join(lines, "\n"))
+	if !strings.Contains(joined, "+first") || !strings.Contains(joined, "+second") {
+		t.Errorf("staged-change diff (--cached) must show the added lines; got:\n%s", joined)
+	}
+}
+
+// TestDiffHunksEmptyDiffIsError pins D10/FR6: a tracked file with NO textual diff
+// (e.g. nothing changed) yields an empty `git diff` → diffHunks returns a non-nil
+// error so the caller degrades to full content rather than render an empty pane.
+func TestDiffHunksEmptyDiffIsError(t *testing.T) {
+	dir := t.TempDir()
+	gitExec(t, dir, "init")
+	mustWrite(t, dir, "f.txt", "unchanged\n")
+	gitExec(t, dir, "add", "f.txt")
+	gitExec(t, dir, "commit", "-m", "init")
+	// No modification: `git diff HEAD -- f.txt` is empty.
+
+	root := detectRepoRoot(dir)
+	_, _, err := diffHunks(root, "f.txt")
+	if err == nil {
+		t.Errorf("an empty diff must return a non-nil error so the caller falls back to content")
+	}
+}
+
+// TestDiffHunksResilientOnNonRepo pins FR10: pointing diffHunks at a directory
+// that is not a git repo (git diff fails) returns an error, never panics — the
+// caller degrades to full content.
+func TestDiffHunksResilientOnNonRepo(t *testing.T) {
+	dir := t.TempDir() // no `git init`
+	_, _, err := diffHunks(dir, "whatever.txt")
+	if err == nil {
+		t.Errorf("diffHunks on a non-repo dir must return an error (degrade signal)")
+	}
+}
+
+// lineStyledLike reports whether `line`'s leading SGR matches what `style` renders
+// — i.e. the line was colored through that style. Compares the escape up to the
+// first 'm' against a marker rendered through the style.
+func lineStyledLike(line string, style lipgloss.Style) bool {
+	return sgrPrefix(line) == sgrPrefix(style.Render("x"))
+}
+
+// findDiffBodyLine returns the colorized diff body line whose ansi-stripped text
+// equals `want` (a full diff line incl. its +/-/space prefix), or "" if absent.
+func findDiffBodyLine(lines []string, want string) string {
+	for _, ln := range lines {
+		if ansi.Strip(ln) == want {
+			return ln
+		}
+	}
+	return ""
+}
+
+// TestDiffHunksContentLinesNotSpoofedByHeaderPrefix pins D11/FR1's color contract
+// against content that COLLIDES with the +++/--- file-header prefix. A removed
+// source line `-- keep comment` (SQL/Lua comment) renders in unified diff as
+// `--- keep comment`; an added `++counter` (C/C++ increment) renders as
+// `+++counter`. A prefix-based header check would misread both as headers and dim
+// them — so a removed `--`-comment must stay RED and an added `++`-line GREEN.
+// These tokens are common in exactly the code an agent edits.
+func TestDiffHunksContentLinesNotSpoofedByHeaderPrefix(t *testing.T) {
+	dir := t.TempDir()
+	gitExec(t, dir, "init")
+	// Baseline holds the `-- keep comment` line; the new revision removes it and
+	// adds a `++counter` line. The diff body then carries `--- keep comment` (a
+	// removal) and `+++counter` (an addition) — both spoof the header prefix.
+	mustWrite(t, dir, "f.txt", "alpha\n-- keep comment\nbeta\n")
+	gitExec(t, dir, "add", "f.txt")
+	gitExec(t, dir, "commit", "-m", "init")
+	mustWrite(t, dir, "f.txt", "alpha\n++counter\nbeta\n")
+
+	root := detectRepoRoot(dir)
+	lines, _, err := diffHunks(root, "f.txt")
+	if err != nil {
+		t.Fatalf("diffHunks err=%v", err)
+	}
+
+	removed := findDiffBodyLine(lines, "--- keep comment")
+	if removed == "" {
+		t.Fatalf("diff body must contain the removed line %q; got:\n%s",
+			"--- keep comment", ansi.Strip(strings.Join(lines, "\n")))
+	}
+	if !lineStyledLike(removed, diffLineStyle('-')) {
+		t.Errorf("removed `-- comment` (renders %q) must be RED (colDiffDel), got sgr=%q want %q",
+			"--- keep comment", sgrPrefix(removed), sgrPrefix(diffLineStyle('-').Render("x")))
+	}
+
+	added := findDiffBodyLine(lines, "+++counter")
+	if added == "" {
+		t.Fatalf("diff body must contain the added line %q; got:\n%s",
+			"+++counter", ansi.Strip(strings.Join(lines, "\n")))
+	}
+	if !lineStyledLike(added, diffLineStyle('+')) {
+		t.Errorf("added `++counter` (renders %q) must be GREEN (colDiffAdd), got sgr=%q want %q",
+			"+++counter", sgrPrefix(added), sgrPrefix(diffLineStyle('+').Render("x")))
+	}
+}
+
+// TestDiffHunksColorSurvivesColorUiAlways pins D11/FR1 against a repo configured
+// with color.ui=always: git would otherwise inject its OWN ANSI into the piped
+// diff, so every content line would start with an escape (line[0]==0x1b) and read
+// as neither '+' nor '-' → the whole diff dims, defeating the add-green/remove-red
+// signal. diffHunks must force --no-color so its own colorization keys on the real
+// +/- prefix.
+func TestDiffHunksColorSurvivesColorUiAlways(t *testing.T) {
+	dir := t.TempDir()
+	gitExec(t, dir, "init")
+	gitExec(t, dir, "config", "color.ui", "always")
+	mustWrite(t, dir, "f.txt", "alpha\nbeta\ngamma\n")
+	gitExec(t, dir, "add", "f.txt")
+	gitExec(t, dir, "commit", "-m", "init")
+	mustWrite(t, dir, "f.txt", "alpha\nDELTA\ngamma\n") // -beta +DELTA
+
+	root := detectRepoRoot(dir)
+	lines, _, err := diffHunks(root, "f.txt")
+	if err != nil {
+		t.Fatalf("diffHunks err=%v", err)
+	}
+
+	added := findDiffBodyLine(lines, "+DELTA")
+	if added == "" {
+		t.Fatalf("diff body must contain `+DELTA` (git's color escapes leaked into the line text); got:\n%s",
+			ansi.Strip(strings.Join(lines, "\n")))
+	}
+	if !lineStyledLike(added, diffLineStyle('+')) {
+		t.Errorf("added line under color.ui=always must be GREEN (colDiffAdd), got sgr=%q want %q",
+			sgrPrefix(added), sgrPrefix(diffLineStyle('+').Render("x")))
+	}
+	removed := findDiffBodyLine(lines, "-beta")
+	if removed == "" {
+		t.Fatalf("diff body must contain `-beta`; got:\n%s", ansi.Strip(strings.Join(lines, "\n")))
+	}
+	if !lineStyledLike(removed, diffLineStyle('-')) {
+		t.Errorf("removed line under color.ui=always must be RED (colDiffDel), got sgr=%q want %q",
+			sgrPrefix(removed), sgrPrefix(diffLineStyle('-').Render("x")))
 	}
 }

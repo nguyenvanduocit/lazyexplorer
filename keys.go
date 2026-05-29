@@ -35,7 +35,8 @@ type KeyMap struct {
 	PreviewHScrollHalfLeft,
 	PreviewHScrollHalfRight,
 	PreviewHScrollReset,
-	PreviewToggleWrap key.Binding
+	PreviewToggleWrap,
+	ToggleDiff key.Binding // v — diff ↔ full content for a modified file (prd-preview-diff-view)
 
 	// Mutation (normal mode + focusList)
 	Rename,
@@ -80,6 +81,7 @@ func defaultKeyMap() KeyMap {
 		PreviewHScrollHalfRight: key.NewBinding(key.WithKeys("L"), key.WithHelp("L", "scroll ½ right")),
 		PreviewHScrollReset:     key.NewBinding(key.WithKeys("0"), key.WithHelp("0", "scroll reset")),
 		PreviewToggleWrap:       key.NewBinding(key.WithKeys("w"), key.WithHelp("w", "toggle wrap")),
+		ToggleDiff:              key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "toggle diff")),
 
 		Rename: key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "rename")),
 		Delete: key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete")),

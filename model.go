@@ -157,6 +157,16 @@ type model struct {
 	previewIsDir   bool
 	previewDirPath string // abs path of the folder being previewed; "" unless previewIsDir. The base dir the git indicator resolves preview rows against (prd-git-change-indicator §5.3).
 
+	// Diff preview state (prd-preview-diff-view). diffOn is the session-sticky
+	// toggle: when true (the ship default, D3) a tracked-modified text file lands
+	// showing its diff vs HEAD instead of its full content; `v` flips it (D4/D12).
+	// It is NOT reset per file — like previewWrap it is a session preference.
+	// previewIsDiff marks that the CURRENT selection's preview is a diff (set by the
+	// refreshPreview state-select branch, D2); it defaults OFF with the same reset
+	// hygiene as previewIsDir so a stale "true" never mis-routes syncPreview.
+	diffOn        bool
+	previewIsDiff bool
+
 	// Horizontal scroll + wrap (plain text + code only — prd-horizontal-scroll-preview).
 	// previewScrollable is true when the preview can pan horizontally (plain/code);
 	// false for markdown (glamour already wrapped), images, folders. previewHScroll
@@ -296,7 +306,9 @@ func newModel(root string, tel Recorder) model {
 	if tel == nil {
 		tel = noopRecorder{}
 	}
-	m := model{root: root, cwd: root, leftRatio: 0.38, topRatio: 0.33, keymap: defaultKeyMap(), tel: tel}
+	// diffOn defaults TRUE (prd-preview-diff-view D3): a tracked-modified file lands
+	// showing its diff so the review-the-edit-before-accept loop closes in the pane.
+	m := model{root: root, cwd: root, leftRatio: 0.38, topRatio: 0.33, keymap: defaultKeyMap(), tel: tel, diffOn: true}
 	// Detect the repo once — the jail root is fixed, so the repo root can't change
 	// for the session. Inside a repo, prime the first async git refresh: Init
 	// dispatches it, and marking it in-flight here stops the first poll tick from
@@ -331,26 +343,42 @@ func repoRelPrefix(repoRoot, root string) string {
 	return filepath.ToSlash(rel)
 }
 
+// repoRelKey maps an entry named `name` shown under baseDir to the repo-relative
+// slash key git uses (the key into m.git.changes / m.git.dirtyDirs). It resolves
+// in the app's path space — rel to the jail root, which is symlink-clean — then
+// prepends gitRootPrefix to reach the repo root, sidestepping the symlink mismatch
+// between the launch path and git's resolved toplevel. ok=false when git mode is
+// off, baseDir/name can't be made relative to the root, or the path escapes the
+// repo ("../"). It is the SINGLE resolver shared by indicatorFor (the badge),
+// diffApplies (the M/R-text predicate), and diffRelPath (the diff exec key), so a
+// row's badge key and its diff key can never diverge (D2/§5.2).
+func (m model) repoRelKey(baseDir, name string) (string, bool) {
+	if m.git.repoRoot == "" {
+		return "", false
+	}
+	within, err := filepath.Rel(m.root, filepath.Join(baseDir, name))
+	if err != nil {
+		return "", false
+	}
+	rel := filepath.ToSlash(filepath.Join(m.gitRootPrefix, within))
+	if rel == ".." || strings.HasPrefix(rel, "../") {
+		return "", false // entry sits outside the repo (defensive)
+	}
+	return rel, true
+}
+
 // indicatorFor resolves the git change indicator for entry e shown under baseDir
 // (the list pane passes m.cwd, the folder preview passes m.previewDirPath). It
 // returns nil when there is nothing to draw: git mode off, the synthetic "..",
 // an unchanged path, or a path that resolves outside the repo. The map lookups
 // are safe on a nil map (git mode primed but first refresh not yet landed).
 func (m model) indicatorFor(baseDir string, e entry) *rowIndicator {
-	if m.git.repoRoot == "" || e.name == ".." {
+	if e.name == ".." {
 		return nil
 	}
-	// Resolve the entry's key in the app's path space (rel to the jail root, which
-	// is symlink-clean), then prepend gitRootPrefix to reach the repo-relative key
-	// git uses. Doing it via m.root — not m.git.repoRoot — avoids the symlink
-	// mismatch between the launch path and git's resolved toplevel.
-	within, err := filepath.Rel(m.root, filepath.Join(baseDir, e.name))
-	if err != nil {
+	rel, ok := m.repoRelKey(baseDir, e.name)
+	if !ok {
 		return nil
-	}
-	rel := filepath.ToSlash(filepath.Join(m.gitRootPrefix, within))
-	if rel == ".." || strings.HasPrefix(rel, "../") {
-		return nil // entry sits outside the repo (defensive)
 	}
 	if e.isDir {
 		if m.git.dirtyDirs[rel] {
@@ -362,6 +390,53 @@ func (m model) indicatorFor(baseDir string, e entry) *rowIndicator {
 		return &rowIndicator{badge: chg.code.badge(), color: gitColor(chg.code), delta: chg.deltaString()}
 	}
 	return nil
+}
+
+// previewBaseDir is the directory the selected entry's git key resolves against.
+// It mirrors the base refreshPreview already uses for the file path: the cwd in
+// normal mode, the jail root in search mode (where each entry name is a path
+// relative to root). diffApplies + diffRelPath read it so the diff key matches the
+// path readPreviewBytes opened.
+func (m model) previewBaseDir() string {
+	if m.mode == modeSearch {
+		return m.root
+	}
+	return m.cwd
+}
+
+// diffApplies reports whether the selected entry's preview should be a DIFF rather
+// than its full content (prd-preview-diff-view §5.2/D6): true ONLY for a tracked
+// file whose git code is modified (M) or renamed (R) AND whose content is text
+// (kind=="text") AND that resolves inside the repo. Every other reachable code —
+// added/untracked (all-new, content IS the useful diff) and conflict (content shows
+// the merge markers) — is false, so it falls through to the existing renderer/content
+// path. A binary M/R file is also false here (kind!="text") and is handled by the
+// FR5 placeholder branch in refreshPreview, not the content renderer.
+func (m model) diffApplies(sel entry, kind string) bool {
+	if sel.isDir || sel.name == ".." || kind != "text" {
+		return false
+	}
+	rel, ok := m.repoRelKey(m.previewBaseDir(), sel.name)
+	if !ok {
+		return false
+	}
+	chg, ok := m.git.changes[rel]
+	if !ok {
+		return false
+	}
+	return chg.code == gitModified || chg.code == gitRenamed
+}
+
+// diffRelPath resolves the selected entry's repo-relative key for the diffHunks
+// exec — the same resolve indicatorFor/diffApplies use, so the diff is fetched for
+// the exact path whose badge the user is reacting to. Returns "" when the selection
+// has no resolvable key (only ever called when previewIsDiff, where it always does).
+func (m model) diffRelPath() string {
+	if m.cursor < 0 || m.cursor >= len(m.entries) {
+		return ""
+	}
+	rel, _ := m.repoRelKey(m.previewBaseDir(), m.entries[m.cursor].name)
+	return rel
 }
 
 // reload re-reads m.cwd into entries and refreshes the preview for the cursor.
@@ -539,6 +614,10 @@ func (m *model) refreshPreview() {
 	m.previewEntries = nil
 	m.previewIsDir = false
 	m.previewDirPath = "" // only the dir branch below sets it (git indicator base for preview rows)
+	// Diff state defaults OFF, same discipline (prd-preview-diff-view §5.2): only the
+	// diff state-select branch below turns it on, so a stale "true" never mis-routes
+	// syncPreview into dispatching diffHunks for a clean/non-diff selection.
+	m.previewIsDiff = false
 
 	if len(m.entries) == 0 {
 		m.preview = []string{dimStyle.Render("(empty directory)")}
@@ -572,11 +651,28 @@ func (m *model) refreshPreview() {
 	}
 
 	content, kind := readPreviewBytes(full, sel.size)
+	// Diff state-select (prd-preview-diff-view §5.2/D2): a tracked-modified text file
+	// previews its DIFF vs HEAD instead of its content when diffOn. Decided here from
+	// git state, BEFORE the rendererFor block — independent of whether a highlighter
+	// matches (a modified .xyz text file still diffs). Like the renderer branches, the
+	// heavy work (git diff exec) is async (syncPreview); here we only mark the state,
+	// stash the normalized source for the FR6/FR10 fallback, and show an instant
+	// plain placeholder until the diff lands.
+	if m.diffOn && m.diffApplies(sel, kind) {
+		m.srcPath = full
+		m.previewIsDiff = true
+		m.previewScrollable = true                // mirror code (D9): vertical scroll + horizontal window
+		m.srcRaw = []byte(normalizeText(content)) // source for the empty-diff/error fallback (FR6/FR10)
+		m.preview = plainLines(content)           // readable placeholder until the async diff lands
+		return
+	}
 	// A registered renderer (markdown/code/image/…) takes over when it matches the
 	// file AND the content suits it: text renderers need real text (skipped on a
 	// binary file), binary renderers (image) run regardless. Rendering itself is
 	// async (see syncPreview) — here we only stash the source and show an instant
 	// placeholder, never run the heavy renderer inline (that would freeze Update).
+	// A MODIFIED image still reaches here and renders as an image (FR5): only a
+	// modified binary with NO matching renderer falls through to the placeholder below.
 	if r, ok := rendererFor(sel.name); ok && (r.binary || kind == "text") {
 		m.srcPath = full
 		// Code is horizontally scrollable (long lines pan); markdown wraps via
@@ -595,9 +691,37 @@ func (m *model) refreshPreview() {
 	if kind == "text" {
 		m.preview = plainLines(content)
 		m.previewScrollable = true // plain text pans horizontally
+	} else if m.modifiedBinary(sel, kind) {
+		// A tracked-modified BINARY with no image renderer (FR5): a textual diff is
+		// meaningless in a terminal, so report that the binary files differ rather
+		// than exec a diff on it. Only reached when diffOn would otherwise have
+		// applied — i.e. an M/R non-text file the image renderer didn't claim.
+		m.preview = []string{dimStyle.Render("(binary files differ — " + humanSize(sel.size) + ")")}
 	} else {
 		m.preview = placeholderLines(kind, content, sel.size)
 	}
+}
+
+// modifiedBinary reports whether the selection is a tracked-modified (M/R) file
+// whose content is NOT text (prd-preview-diff-view FR5). It is diffApplies minus
+// the text clause — the SAME git-state lookup — so the FR5 placeholder fires for
+// exactly the files diffApplies rejected only for being binary. The diffOn gate is
+// applied at the call site (refreshPreview) so the placeholder mirrors the diff
+// branch: a binary M/R file shows it only while diffOn, else the generic
+// "(binary file — …)" placeholder.
+func (m model) modifiedBinary(sel entry, kind string) bool {
+	if !m.diffOn || sel.isDir || sel.name == ".." || kind == "text" {
+		return false
+	}
+	rel, ok := m.repoRelKey(m.previewBaseDir(), sel.name)
+	if !ok {
+		return false
+	}
+	chg, ok := m.git.changes[rel]
+	if !ok {
+		return false
+	}
+	return chg.code == gitModified || chg.code == gitRenamed
 }
 
 // reflowPreview rebuilds previewDisplay — the visual lines the vertical scroller
@@ -764,6 +888,31 @@ func (m *model) syncPreview() tea.Cmd {
 	if m.pendingWidth == w {
 		return nil // a render for this exact width is already in flight
 	}
+
+	// Diff dispatch (prd-preview-diff-view §5.3/D2): when the state-select branch in
+	// refreshPreview marked this selection as a diff, dispatch a BESPOKE closure that
+	// captures repoRoot + the repo-relative key + the source (for the fallback) —
+	// none of which the registry render(path,content,width,style) signature can carry,
+	// which is WHY diff is state-selected, not registry-matched. It returns the SAME
+	// previewRenderedMsg every other render does, so applyPreview is unchanged.
+	if m.previewIsDiff {
+		m.renderGen++
+		m.pendingWidth = w
+		if m.tel.Active() {
+			m.renderStartedAt = time.Now()
+		}
+		gen, repoRoot, relPath, raw := m.renderGen, m.git.repoRoot, m.diffRelPath(), m.srcRaw
+		return func() tea.Msg {
+			lines, preStyled, err := diffHunks(repoRoot, relPath)
+			if err != nil {
+				// Empty diff (D10/FR6) or any git failure (FR10) → degrade to the
+				// captured source rendered as full content (plain, not pre-styled).
+				return previewRenderedMsg{gen: gen, width: w, lines: plainLines(raw), preStyled: false, err: nil}
+			}
+			return previewRenderedMsg{gen: gen, width: w, lines: lines, preStyled: preStyled, err: nil}
+		}
+	}
+
 	r, ok := rendererFor(filepath.Base(m.srcPath))
 	if !ok {
 		return nil // defensive: srcPath is only set when a renderer matched
@@ -1370,6 +1519,15 @@ func (m model) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.focusPane == focusPreview {
 			m.toggleWrap()
 		}
+
+	// v toggles diff ↔ full content (prd-preview-diff-view D4/D12). Fires at ANY
+	// focus (the review flow scans dirty files in focusList, so it must work there;
+	// harmless in focusPreview). refreshPreview re-runs the state-select with the new
+	// diffOn and resets srcWidth/pendingWidth, so the tail syncPreview re-dispatches.
+	case key.Matches(msg, km.ToggleDiff):
+		m.diffOn = !m.diffOn
+		m.tel.Record("action.preview_diff_toggle", map[string]any{"diff": m.diffOn})
+		m.refreshPreview()
 
 	case key.Matches(msg, km.Rename):
 		if m.focusPane == focusList && len(m.entries) > 0 && m.entries[m.cursor].name != ".." {

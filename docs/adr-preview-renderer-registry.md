@@ -31,6 +31,26 @@ Câu hỏi thiết kế: bơm thêm loại file vào pipeline bằng cách nào?
 | D5 | Mermaid | **Plain text ở v1**, slot registry để ngỏ | Chroma không có lexer `.mmd`; real renderer (`.mmd` → image qua mermaid CLI) = một registry entry tương lai |
 | D6 | Image | **Scaffold renderer** (`binary: true`) | Đọc header (`image.DecodeConfig`) cho metadata thật; terminal-graphics deferred; proves binary-renderer path |
 | D7 | Lookup | **`rendererFor(name)` mỗi lần render**, không lưu pointer | Slice `previewRenderers` append-only tại init, không bao giờ mutate runtime; pointer vào slice = unsafe khi slice grow |
+| D8 | Diff variant | **State-selected ở model layer, KHÔNG name-matched qua registry** ([[prd-preview-diff-view]] D2) | Một file dirty hay không là **git/model state**, không phải thuộc tính filename. Registry quyết *thuần theo filename* (`matches(name) bool`, `fs.go:345`); diff quyết theo `(dirty, diffOn)`. `refreshPreview` chọn diff-vs-content (`diffApplies`) **trước** block `rendererFor`; `syncPreview` dispatch một closure bespoke capture `repoRoot`+`relPath` rồi trả đúng `previewRenderedMsg` — `applyPreview` không đổi |
+
+**Vì sao diff là state-selected, không phải một registry entry:**
+
+Markdown-vs-code là quyết định **filename thuần** — `isMarkdown("x.md")` / `matchLang("x.go")`
+đọc đúng cái tên là đủ. Diff-vs-content là quyết định **`(dirty, diffOn)`**: cùng một
+`auth.go` hiện diff khi nó modified-vs-HEAD và `diffOn`, hiện content khi sạch hoặc khi
+user toggle off. `previewRenderer.matches func(name string) bool` (`fs.go:345`) **không thấy
+được** git state — nó chỉ nhận tên file. Nhồi git-state vào một `matches` closure phá hợp
+đồng "matches quyết thuần theo tên", và đổi signature `render(path,content,width,style)` để
+mang `repoRoot` sẽ bắt mọi renderer hiện có cõng một tham số chúng không dùng (dead surface).
+
+Vì vậy diff được chọn **một tầng phía trên** registry: `refreshPreview` đọc `m.git` qua
+`diffApplies(sel, kind)` và set `previewIsDiff` **trước** khi hỏi `rendererFor`; `syncPreview`
+thấy `previewIsDiff` thì dispatch một **closure bespoke** capture `repoRoot`+repo-rel path
+(model state) thay vì gọi `r.render`. Closure trả đúng `previewRenderedMsg`, nên `applyPreview`,
+gen-gate, `previewPreStyled`, và view layer vẫn type-agnostic — đúng tinh thần registry, chỉ
+là điểm quyết định nằm ở model state thay vì filename. Modified binary (kind != "text") rơi về
+nhánh placeholder "binary files differ"; modified image vẫn vào image renderer (registry vẫn
+chủ trì các loại binary có renderer).
 
 **Vì sao registry thắng `srcKind` switch:**
 
@@ -86,6 +106,10 @@ code**, mượn idiom.
 **Đánh đổi / giới hạn**
 - Thứ tự registry quan trọng (markdown #1 trước code #2); append-only + comment giải thích
   giảm rủi ro nhầm thứ tự.
+- Diff variant sống **ngoài** registry (D8): một content-variant phụ thuộc state (không phải
+  filename) là nhánh state-select riêng ở `refreshPreview`/`syncPreview`. Đây là ranh giới có
+  chủ đích — registry vẫn là single source cho dispatch *theo loại file*; diff là dispatch *theo
+  git state*. Một variant state-driven tương lai (vd "blame") đi cùng đường, không vào registry.
 - Image scaffold hiện chỉ metadata; terminal-graphics (Kitty/Sixel) sẽ cần renderer thật —
   đổi `renderImagePreview` là đủ, không đụng pipeline.
 - Style hint (`renderStyle`) truyền vào mọi renderer; code/image ignore nó — convention rõ,

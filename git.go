@@ -12,6 +12,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -364,6 +365,85 @@ func countLines(path string) (int, bool) {
 	}
 	return lines, true
 }
+
+// diffHunks fetches the unified diff of one repo-relative path against the same
+// HEAD-aware base the +N/-N badge uses (prd-preview-diff-view FR2/D7), colorizes
+// each line by its leading character (D11), and returns preview lines with
+// preStyled=true (verbatim ANSI, like code). On any failure OR an empty diff it
+// returns (nil, false, err) — a non-nil error — so the syncPreview closure
+// degrades to full content (FR6/FR10). repoRoot + relPath are captured from model
+// state by the syncPreview closure, NOT passed through the registry render
+// signature (D2). Each line is colored full-width; the preview pane windows it
+// horizontally at render time, mirroring code (D9).
+func diffHunks(repoRoot, relPath string) ([]string, bool, error) {
+	// HEAD-aware base (D7): the same branch numstat uses (collectGitState above).
+	// `git diff HEAD` aborts (exit 128) in a repo with no commits, so fall back to
+	// `git diff --cached` there. --no-color forces plain output: a repo/global
+	// `color.ui=always` (or color.diff=always) colorizes even into a pipe, which
+	// would prefix every content line with git's own SGR escape and defeat our own
+	// +/- colorization (D11/FR1). relPath goes after `--` so it can never be read as
+	// a flag; the arg slice never touches a shell.
+	var out []byte
+	var err error
+	if _, herr := runGit(repoRoot, "rev-parse", "--verify", "-q", "HEAD"); herr == nil {
+		out, err = runGit(repoRoot, "diff", "--no-color", "HEAD", "--", relPath)
+	} else {
+		out, err = runGit(repoRoot, "diff", "--no-color", "--cached", "--", relPath)
+	}
+	if err != nil {
+		return nil, false, err // FR10: any git failure → degrade to full content
+	}
+	if len(bytes.TrimSpace(out)) == 0 {
+		// Empty diff despite an M/R badge (mode-only / whitespace-config change,
+		// D10/FR6) → signal "no diff" so the caller falls back to full content.
+		return nil, false, errEmptyDiff
+	}
+
+	// Colorize each line by its role (D11). Each line is styled independently with
+	// self-contained ANSI (open+close SGR), like chroma's code output, so
+	// renderHWindow's horizontal slicing never cuts mid-escape (FR8). The leading
+	// +/-/space character is kept so the diff reads even without color.
+	//
+	// Header lines are discriminated POSITIONALLY, not by a 3-char prefix: the
+	// "diff --git"/"index"/"--- a/…"/"+++ b/…" preamble appears exactly once, before
+	// the first "@@" hunk header — and diffHunks runs on a single path, so the output
+	// is one preamble then hunk bodies. Keying headers on a "---"/"+++" prefix would
+	// misread a CONTENT line whose source begins with '-'/'+' (a removed `-- comment`
+	// renders `--- keep comment`; an added `++x` renders `+++x`) as a header and dim
+	// it instead of red/green. Once seenHunk, every line keys purely on its first
+	// byte: '+' → add, '-' → remove, ' '/'@'/'\' → dim (default arm).
+	raw := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+	lines := make([]string, 0, len(raw))
+	seenHunk := false
+	for _, line := range raw {
+		if !seenHunk {
+			if strings.HasPrefix(line, "@@") {
+				seenHunk = true
+			}
+			lines = append(lines, dimStyle.Render(line)) // preamble header → dim
+			continue
+		}
+		lines = append(lines, diffLineStyle(diffPrefix(line)).Render(line))
+	}
+	return lines, true, nil
+}
+
+// diffPrefix reduces a hunk-body line to the single byte diffLineStyle keys on
+// (D11). It is only called for lines AFTER the first "@@" (diffHunks dims the
+// preamble headers positionally), so a leading '+'/'-' is always a real
+// addition/removal — even when the source text itself starts with "++"/"--". A
+// hunk header ('@'), a context line (' '), a "\ No newline" marker ('\'), and a
+// blank line all fall through to 0 (the dim default arm of diffLineStyle).
+func diffPrefix(line string) byte {
+	if len(line) == 0 {
+		return 0
+	}
+	return line[0]
+}
+
+// errEmptyDiff is the sentinel diffHunks returns when `git diff` is empty despite
+// an M/R badge (D10/FR6) — the caller degrades to full content, never an empty pane.
+var errEmptyDiff = errors.New("git diff produced no hunks")
 
 // markAncestors marks every ancestor directory of a repo-relative slash path as
 // dirty ("a/b/c.go" → "a", "a/b"). The path itself is NOT marked — folder ● means

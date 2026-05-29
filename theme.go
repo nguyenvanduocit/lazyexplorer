@@ -22,6 +22,14 @@ var (
 	colFg     = lipgloss.Color("#E6E6E6")
 	colSelFg  = lipgloss.Color("#FFFFFF")
 	colGitNew = lipgloss.Color("#3FB950") // git new/untracked/added badge (github green)
+
+	// Diff preview colors (prd-preview-diff-view D11). The git-diff CLI convention —
+	// additions green, removals red, hunk-headers/context muted — reusing the
+	// existing git palette so the diff stays in one accent family (no new color):
+	// added reuses colGitNew (the untracked/added green), removed reuses colDanger
+	// (the delete/conflict red). Hunk headers + context lines use colDim (dimStyle).
+	colDiffAdd = colGitNew // diff "+" lines (additions)
+	colDiffDel = colDanger // diff "-" lines (removals)
 )
 
 // gitColor maps a git change code to its badge foreground (PRD prd-git-change-indicator D12).
@@ -34,6 +42,25 @@ func gitColor(c gitCode) color.Color {
 		return colDanger
 	default: // gitModified, gitRenamed
 		return colWarn
+	}
+}
+
+// diffLineStyle maps a hunk-body line's leading byte to its style (D11):
+// '+' → added (colDiffAdd), '-' → removed (colDiffDel), everything else (the
+// '@@…' hunk header, the ' '-prefixed context lines, and the '\ No newline'
+// marker) → dimStyle (colDim). diffHunks dims the preamble file headers
+// positionally (before the first '@@') and renders each hunk-body line through
+// this, so the leading +/-/space character is kept readable even when the color
+// is lost (a monochrome terminal still reads the diff). The empty-line case
+// (a zero-length diff line) falls through to dimStyle, which is harmless.
+func diffLineStyle(prefix byte) lipgloss.Style {
+	switch prefix {
+	case '+':
+		return lipgloss.NewStyle().Foreground(colDiffAdd)
+	case '-':
+		return lipgloss.NewStyle().Foreground(colDiffDel)
+	default:
+		return dimStyle
 	}
 }
 
