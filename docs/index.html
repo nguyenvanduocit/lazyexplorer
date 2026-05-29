@@ -211,6 +211,8 @@
     border: 1px solid var(--rule); border-left: 2px solid var(--accent); border-radius: 6px;
   }
   .entry .demo .ink { color: var(--green); }
+  .entry .demo .ga  { color: var(--green); }   /* git badge — added / untracked */
+  .entry .demo .gm  { color: var(--amber); }   /* git badge — modified */
 
   /* ───────────── Install / usage + keys ───────────── */
   .listing { border: 1px solid var(--rule); border-radius: 8px; background: var(--bg-2); margin-bottom: 18px; overflow: hidden; }
@@ -385,6 +387,22 @@
         </p>
         <div class="demo"><span class="ink">$ lazyexplorer --split</span>        ← a pane to the right
 <span class="ink">$ lazyexplorer --split=below</span>  ← or stacked underneath</div>
+      </article>
+
+      <article class="entry reveal">
+        <h3><span class="no">04</span>See what the agent just touched</h3>
+        <p>
+          As the agent writes, every row picks up a git badge — added, modified, or untracked —
+          beside a muted count of the lines that moved. Folders with edits underneath carry a quiet
+          <span class="mono-inline">●</span>. No diff to open, no <span class="mono-inline">git status</span>
+          to run: glance at the tree and <span class="hl">the agent's footprint is already there</span>.
+        </p>
+        <div class="demo">auth_handler.go     <span class="ga">A</span>   +42
+config.go           <span class="gm">M</span>   +8 -3
+notes.md            <span class="ga">?</span>   +15
+internal/           ●
+
+badge = git status · muted +/- = lines changed · ● = a folder holding edits</div>
       </article>
     </div>
   </section>
