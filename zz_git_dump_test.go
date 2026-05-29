@@ -47,7 +47,8 @@ func TestDumpGitFrame(t *testing.T) {
 
 	m := newModel(repo, nil)
 	m.width, m.height = 90, 26
-	nm, _ := m.Update(gitRefreshedMsg{gen: m.gitGen, state: collectGitState(m.git.repoRoot)})
+	state, _ := collectGitState(m.git.repoRoot, nil)
+	nm, _ := m.Update(gitRefreshedMsg{gen: m.gitGen, state: state})
 	m = nm.(model)
 	// Move the cursor off ".git" onto a real changed file so the screenshot shows
 	// both an active row (plain indicator) and inactive rows (colored badges).

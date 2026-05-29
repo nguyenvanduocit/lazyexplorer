@@ -17,11 +17,11 @@ var (
 	colAccent = lipgloss.Color("#7D56F4") // active panel border, cursor
 	colDir    = lipgloss.Color("#56B6F4") // folders
 	colDim    = lipgloss.Color("#6C757D") // muted text, inactive borders
-	colDanger = lipgloss.Color("#DC3545") // delete confirm; git deleted/conflict badge; "-N" delta
+	colDanger = lipgloss.Color("#DC3545") // delete confirm; git deleted/conflict badge
 	colWarn   = lipgloss.Color("#FFC107") // rename; git modified/renamed badge
 	colFg     = lipgloss.Color("#E6E6E6")
 	colSelFg  = lipgloss.Color("#FFFFFF")
-	colGitNew = lipgloss.Color("#3FB950") // git new/untracked/added badge + "+N" delta (github green)
+	colGitNew = lipgloss.Color("#3FB950") // git new/untracked/added badge (github green)
 )
 
 // gitColor maps a git change code to its badge foreground (PRD prd-git-change-indicator D12).
@@ -36,12 +36,6 @@ func gitColor(c gitCode) color.Color {
 		return colWarn
 	}
 }
-
-// Diffstat delta token styles: "+N" green, "-N" red — git's own convention (D12).
-var (
-	gitAddStyle = lipgloss.NewStyle().Foreground(colGitNew)
-	gitDelStyle = lipgloss.NewStyle().Foreground(colDanger)
-)
 
 var (
 	// Cursor row in the active list.

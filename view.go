@@ -421,21 +421,9 @@ func (ri *rowIndicator) fullStyled() string {
 	if ri.delta == "" {
 		return ri.badgeStyled()
 	}
-	return ri.badgeStyled() + " " + styleDelta(ri.delta)
-}
-
-// styleDelta colors each diffstat token: "+N" green, "-N" red (D12) — git's own
-// convention, read fast at a glance.
-func styleDelta(delta string) string {
-	parts := strings.Fields(delta)
-	for i, p := range parts {
-		if strings.HasPrefix(p, "-") {
-			parts[i] = gitDelStyle.Render(p)
-		} else {
-			parts[i] = gitAddStyle.Render(p)
-		}
-	}
-	return strings.Join(parts, " ")
+	// The delta is muted (dimStyle) so the colored badge stays the focal point —
+	// a bright green/red diffstat read as visually too heavy beside the agent (D12).
+	return ri.badgeStyled() + " " + dimStyle.Render(ri.delta)
 }
 
 // chooseIndicator picks the widest indicator candidate that fits beside a name of
@@ -474,8 +462,8 @@ func chooseIndicator(ind *rowIndicator, nw, w int) (plain, styled string) {
 // Styling:
 //   - dir → name + "/" in dirStyle (the synthetic ".." keeps no slash, FR2); a
 //     dirty folder adds ● (dimStyle) on the right via styleRow.
-//   - file (inactive) → name in fileStyle, badge in its status color, delta as a
-//     green/red diffstat (styleRow).
+//   - file (inactive) → name in fileStyle, badge in its status color, delta muted
+//     in dimStyle so the badge leads (styleRow).
 //   - active → whole row one accent style, indicator laid out PLAIN so it stays
 //     legible on the highlight (a colored badge on the accent bg could wash out,
 //     D11) — the change type of the selected file reads from the preview pane.

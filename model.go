@@ -45,10 +45,14 @@ func tickCmd() tea.Cmd {
 type gitRefreshedMsg struct {
 	gen   uint64
 	state gitState
+	cache untrackedCache // refreshed untracked line-count cache, threaded into the next dispatch
 }
 
-func gitRefreshCmd(repoRoot string, gen uint64) tea.Cmd {
-	return func() tea.Msg { return gitRefreshedMsg{gen: gen, state: collectGitState(repoRoot)} }
+func gitRefreshCmd(repoRoot string, gen uint64, prev untrackedCache) tea.Cmd {
+	return func() tea.Msg {
+		state, cache := collectGitState(repoRoot, prev)
+		return gitRefreshedMsg{gen: gen, state: state, cache: cache}
+	}
 }
 
 // spinnerInterval is how fast the footer render spinner advances. ~100ms reads as
@@ -205,6 +209,11 @@ type model struct {
 	git         gitState
 	gitGen      uint64
 	gitInFlight bool
+	// gitUntrackedCache memoizes untracked line counts across refreshes, keyed by
+	// path+mtime+size. It is ONLY passed to gitRefreshCmd and reassigned wholesale
+	// on apply (never mutated in place), so the async goroutine that reads it can
+	// never race the main loop. See collectGitState/countUntracked.
+	gitUntrackedCache untrackedCache
 	// gitRootPrefix is the jail root's path RELATIVE TO the repo root (slash-form;
 	// "" when they coincide). It bridges two path spaces: the app's root/cwd are
 	// the launch paths as given (may contain symlink components — macOS /tmp, /var),
@@ -863,7 +872,7 @@ func (m model) Init() tea.Cmd {
 	// Inside a repo, kick off the first git refresh alongside the poll loop.
 	// newModel already primed gitGen/gitInFlight; tea.Batch keeps tickCmd running.
 	if m.git.repoRoot != "" {
-		return tea.Batch(tickCmd(), gitRefreshCmd(m.git.repoRoot, m.gitGen))
+		return tea.Batch(tickCmd(), gitRefreshCmd(m.git.repoRoot, m.gitGen, m.gitUntrackedCache))
 	}
 	return tickCmd()
 }
@@ -888,7 +897,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.git.repoRoot != "" && !m.gitInFlight {
 			m.gitInFlight = true
 			m.gitGen++
-			cmd = tea.Batch(tickCmd(), gitRefreshCmd(m.git.repoRoot, m.gitGen))
+			cmd = tea.Batch(tickCmd(), gitRefreshCmd(m.git.repoRoot, m.gitGen, m.gitUntrackedCache))
 		}
 	case gitRefreshedMsg:
 		// Async git snapshot landed. Clear the in-flight guard so the next tick can
@@ -898,6 +907,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.gitInFlight = false
 		if msg.gen == m.gitGen {
 			m.git = msg.state
+			m.gitUntrackedCache = msg.cache
 		}
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height

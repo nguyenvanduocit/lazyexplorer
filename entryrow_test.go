@@ -164,8 +164,8 @@ func TestRenderEntryRowFileNoSizeWhenClean(t *testing.T) {
 }
 
 // TestRenderEntryRowFileBadgeAndDelta pins an inactive modified file (FR1/FR2/
-// D12): the badge "M" carries the modified color, "+41" the green add color, and
-// "-3" the red delete color — name stays in fileStyle.
+// D12): the badge "M" carries the modified color while the line delta is muted
+// (dimStyle) so the badge stays the focal point — name stays in fileStyle.
 func TestRenderEntryRowFileBadgeAndDelta(t *testing.T) {
 	ind := &rowIndicator{badge: "M", color: gitColor(gitModified), delta: "+41 -3"}
 	got := renderEntryRow(entry{name: "main.go", isDir: false}, ind, 30, false, true)
@@ -175,12 +175,10 @@ func TestRenderEntryRowFileBadgeAndDelta(t *testing.T) {
 			t.Errorf("row should contain %q; got %q", want, plain)
 		}
 	}
-	// "+41" wrapped in the green add style, "-3" in the red delete style.
-	if !strings.Contains(got, leadingSGR(t, gitAddStyle)+"+41") {
-		t.Errorf("\"+41\" must be wrapped in gitAddStyle (green); got %q", got)
-	}
-	if !strings.Contains(got, leadingSGR(t, gitDelStyle)+"-3") {
-		t.Errorf("\"-3\" must be wrapped in gitDelStyle (red); got %q", got)
+	// The delta "+41 -3" is rendered muted (dimStyle), not bright green/red — the
+	// loud diffstat was visually too heavy beside the agent (D12).
+	if !strings.Contains(got, leadingSGR(t, dimStyle)+"+41") {
+		t.Errorf("the delta must be wrapped in dimStyle (muted); got %q", got)
 	}
 	// The badge carries the modified (amber) foreground.
 	badgeSGR := leadingSGR(t, lipgloss.NewStyle().Foreground(gitColor(gitModified)))
@@ -344,7 +342,7 @@ func TestChooseIndicatorPriority(t *testing.T) {
 
 // TestRenderEntryRowActiveIndicatorPlain pins D11/FR6: the cursor row carries the
 // indicator (so the selected file's change is still visible) but renders it PLAIN
-// inside the accent highlight — the green/red delta colors do NOT leak onto the
+// inside the accent highlight — the muted delta color does NOT leak onto the
 // accent background. Row width stays exactly w.
 func TestRenderEntryRowActiveIndicatorPlain(t *testing.T) {
 	ind := &rowIndicator{badge: "M", color: gitColor(gitModified), delta: "+41 -3"}
@@ -359,10 +357,10 @@ func TestRenderEntryRowActiveIndicatorPlain(t *testing.T) {
 	if !strings.Contains(ansi.Strip(got), "+41") {
 		t.Errorf("active row should still show the delta text; got %q", ansi.Strip(got))
 	}
-	// The green add color must NOT appear — the indicator is laid out plain on the
-	// accent so it can't wash out (a per-token color over accent is the bug D11 avoids).
-	if strings.Contains(got, leadingSGR(t, gitAddStyle)) {
-		t.Errorf("active row indicator must be plain (no green delta SGR); got %q", got)
+	// The muted delta color must NOT appear — the indicator is laid out plain on the
+	// accent so it can't wash out (a colored delta over accent is the bug D11 avoids).
+	if strings.Contains(got, leadingSGR(t, dimStyle)) {
+		t.Errorf("active row indicator must be plain (no muted delta SGR); got %q", got)
 	}
 }
 

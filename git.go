@@ -76,7 +76,8 @@ type gitChange struct {
 }
 
 // deltaString renders the diffstat, omitting a zero side: "+41 -3" / "+88" /
-// "-54" / "" (no delta known). The view colors "+N" green and "-N" red.
+// "-54" / "" (no delta known). The view renders it muted (dimStyle) so the
+// colored badge stays the focal point (D12).
 func (g gitChange) deltaString() string {
 	if !g.hasDelta {
 		return ""
@@ -128,15 +129,37 @@ func detectRepoRoot(dir string) string {
 	return strings.TrimSpace(string(out))
 }
 
+// untrackedStat caches one untracked file's line count keyed by its on-disk
+// identity (mtime+size). On the next refresh a cache hit skips re-reading the
+// file: the steady-state untracked-scan cost drops from a full read (up to
+// maxPreviewBytes per file) to a single stat. ok=false caches "binary/unreadable"
+// so such a file is not re-read every tick either.
+type untrackedStat struct {
+	mtime int64
+	size  int64
+	lines int
+	ok    bool
+}
+
+// untrackedCache maps a repo-relative slash path to its cached line count. The
+// model holds it between refreshes and threads the prior snapshot into
+// gitRefreshCmd; the async goroutine only READS that prior cache and returns a
+// freshly built one, so the map is never mutated across goroutines (see
+// model.gitUntrackedCache and the apply path in Update).
+type untrackedCache map[string]untrackedStat
+
 // collectGitState gathers the full change snapshot for a repo. It is the body of
-// the async tea.Cmd. Resilience (FR10): any exec failure degrades that step
-// rather than the whole state — a failed `git status` yields empty changes (no
-// badges), and a failed numstat (e.g. a no-commit repo where `diff HEAD` aborts)
-// leaves badges intact with no deltas (per-command independence).
-func collectGitState(repoRoot string) gitState {
+// the async tea.Cmd. `prev` is the untracked line-count cache from the last
+// refresh; collectGitState returns the refreshed cache alongside the snapshot so
+// the model can thread it into the next dispatch. Resilience (FR10): any exec
+// failure degrades that step rather than the whole state — a failed `git status`
+// yields empty changes (no badges) and preserves `prev` for the next attempt, and
+// a failed numstat (e.g. a no-commit repo where `diff HEAD` aborts) leaves badges
+// intact with no deltas (per-command independence).
+func collectGitState(repoRoot string, prev untrackedCache) (gitState, untrackedCache) {
 	st := gitState{repoRoot: repoRoot, changes: map[string]gitChange{}, dirtyDirs: map[string]bool{}}
 	if repoRoot == "" {
-		return st
+		return st, prev
 	}
 
 	// 1. Status drives the badges. -uall expands untracked DIRECTORIES into their
@@ -144,7 +167,7 @@ func collectGitState(repoRoot string) gitState {
 	//    which would leave the folder ● dark and its files unbadged).
 	statusOut, err := runGit(repoRoot, "status", "--porcelain=v1", "-z", "-uall")
 	if err != nil {
-		return st // degrade: no git info this refresh
+		return st, prev // degrade: keep the cache for the next attempt
 	}
 	parseStatus(statusOut, st.changes)
 
@@ -159,14 +182,15 @@ func collectGitState(repoRoot string) gitState {
 	}
 	applyNumstat(numOut, st.changes)
 
-	// 3. Untracked files have no numstat row → count their lines directly (capped).
-	countUntracked(repoRoot, st.changes, maxUntrackedScan)
+	// 3. Untracked files have no numstat row → count their lines directly (capped,
+	//    cache-backed so unchanged files are not re-read).
+	next := countUntracked(repoRoot, st.changes, prev, maxUntrackedScan)
 
 	// 4. Roll-up: mark every ancestor dir of a change so folder rows can show ●.
 	for k := range st.changes {
 		markAncestors(k, st.dirtyDirs)
 	}
-	return st
+	return st, next
 }
 
 // splitNUL splits NUL-separated git -z output, dropping the trailing empty field
@@ -270,25 +294,46 @@ func applyNumstat(data []byte, changes map[string]gitChange) {
 	}
 }
 
-// countUntracked fills "+N" line counts for untracked files (badge "?") by
-// reading each (capped at maxPreviewBytes) and counting lines. Capped at `limit`
-// files total per refresh; a binary / unreadable / over-limit file keeps its
-// badge but gets no delta.
-func countUntracked(repoRoot string, changes map[string]gitChange, limit int) {
-	scanned := 0
+// countUntracked fills "+N" line counts for untracked files (badge "?") and
+// returns the refreshed line-count cache. Each untracked path is stat'd; on a
+// cache hit (same mtime+size as `prev`) the cached count is reused without
+// re-reading the file. Only a fresh read (new or changed file) counts against
+// `limit`, so steady-state refreshes do near-zero file I/O. A binary / unreadable
+// file keeps its badge but gets no delta; an over-limit fresh file is left
+// uncounted (and uncached) so a later tick under the limit can still pick it up.
+func countUntracked(repoRoot string, changes map[string]gitChange, prev untrackedCache, limit int) untrackedCache {
+	next := untrackedCache{}
+	reads := 0
 	for key, chg := range changes {
 		if chg.code != gitUntracked {
 			continue
 		}
-		if scanned >= limit {
-			break
+		full := filepath.Join(repoRoot, filepath.FromSlash(key))
+		info, serr := os.Stat(full)
+		if serr != nil || info.IsDir() {
+			continue // unreadable or a dir: no delta, nothing to cache
 		}
-		scanned++
-		if n, ok := countLines(filepath.Join(repoRoot, filepath.FromSlash(key))); ok {
+		mt, sz := info.ModTime().UnixNano(), info.Size()
+		if c, hit := prev[key]; hit && c.mtime == mt && c.size == sz {
+			next[key] = c // unchanged since last refresh → reuse the count, skip the read
+			if c.ok {
+				chg.added, chg.deleted, chg.hasDelta = c.lines, 0, true
+				changes[key] = chg
+			}
+			continue
+		}
+		if reads >= limit {
+			continue // over the read budget this tick: badge stays, no delta, retry next tick
+		}
+		reads++
+		n, ok := countLines(full)
+		next[key] = untrackedStat{mtime: mt, size: sz, lines: n, ok: ok}
+		if ok {
 			chg.added, chg.deleted, chg.hasDelta = n, 0, true
 			changes[key] = chg
 		}
 	}
+	return next
 }
 
 // countLines reads up to maxPreviewBytes of path and counts lines (newlines, +1

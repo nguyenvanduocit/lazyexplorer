@@ -197,6 +197,62 @@ func TestCountLines(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// countUntracked — line-count cache (skip re-reading unchanged files)
+// ---------------------------------------------------------------------------
+
+func TestCountUntrackedCacheHitSkipsReread(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "notes.txt")
+	if err := os.WriteFile(p, []byte("a\nb\nc\n"), 0o644); err != nil { // 3 lines on disk
+		t.Fatal(err)
+	}
+	info, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mt, sz := info.ModTime().UnixNano(), info.Size()
+
+	// prev claims a DIFFERENT (wrong) line count for the same mtime+size. A cache
+	// hit must reuse it verbatim — proof the file was not re-read.
+	prev := untrackedCache{"notes.txt": {mtime: mt, size: sz, lines: 999, ok: true}}
+	changes := map[string]gitChange{"notes.txt": {code: gitUntracked}}
+
+	next := countUntracked(dir, changes, prev, maxUntrackedScan)
+
+	if got := changes["notes.txt"]; !got.hasDelta || got.added != 999 {
+		t.Errorf("cache hit must reuse the cached count (999) without re-reading; got +%d (hasDelta=%v)", got.added, got.hasDelta)
+	}
+	if next["notes.txt"].lines != 999 {
+		t.Errorf("the refreshed cache should carry the reused count forward; got %d", next["notes.txt"].lines)
+	}
+}
+
+func TestCountUntrackedCacheMissRereads(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "notes.txt")
+	if err := os.WriteFile(p, []byte("a\nb\nc\n"), 0o644); err != nil { // 3 lines
+		t.Fatal(err)
+	}
+	info, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A STALE mtime (file looks changed since it was cached) must trigger a re-read,
+	// yielding the real count (3) — never the stale cached value.
+	prev := untrackedCache{"notes.txt": {mtime: info.ModTime().UnixNano() - 1, size: info.Size(), lines: 999, ok: true}}
+	changes := map[string]gitChange{"notes.txt": {code: gitUntracked}}
+
+	next := countUntracked(dir, changes, prev, maxUntrackedScan)
+
+	if got := changes["notes.txt"]; !got.hasDelta || got.added != 3 {
+		t.Errorf("a stale cache entry must trigger a re-read (real count 3); got +%d", got.added)
+	}
+	if next["notes.txt"].lines != 3 {
+		t.Errorf("the refreshed cache should store the freshly counted value 3; got %d", next["notes.txt"].lines)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // collectGitState — against a real repo
 // ---------------------------------------------------------------------------
 
@@ -239,7 +295,7 @@ func TestCollectGitStateModifiedAndUntrackedDir(t *testing.T) {
 	if root == "" {
 		t.Fatal("repoRoot should be detected for an initialized repo")
 	}
-	st := collectGitState(root)
+	st, _ := collectGitState(root, nil)
 
 	// tracked.txt: modified, +1 -0.
 	tr := st.changes["tracked.txt"]
@@ -271,7 +327,7 @@ func TestCollectGitStateNoCommitRepo(t *testing.T) {
 	mustWrite(t, dir, "fresh.go", "package main\n")
 
 	root := detectRepoRoot(dir)
-	st := collectGitState(root)
+	st, _ := collectGitState(root, nil)
 	if st.changes["fresh.go"].code != gitUntracked {
 		t.Errorf("fresh file in a no-commit repo must show untracked; changes=%v", st.changes)
 	}
