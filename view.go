@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"image/color"
+	"path/filepath"
 	"strings"
 
 	"charm.land/bubbles/v2/key"
@@ -29,8 +30,10 @@ import (
 //     preview covers rows [previewFirstRow, previewFirstRow+bottomInner). X-axis
 //     fields (rightInner / dividerStart) stay zero.
 //
-// Body fills rows [0, bodyH); status row sits at m.height-1 in both. firstRow
-// stays a named field (always 0) so mouse + click callers read the same name
+// A 1-row header sits at rows [0, headerH) carrying the root-relative current
+// path (prd-cwd-path-header); the body fills rows [headerH, headerH+bodyH); the
+// status row sits at m.height-1. firstRow (= headerH) is the screen Y of the
+// first body row, threaded so mouse + click callers read the same origin
 // list/preview rendering does — see PRD §5.3 of docs/prd-responsive-layout.md.
 type geometry struct {
 	vertical bool // true → 1-col stacked layout; false → 2-col side-by-side
@@ -47,10 +50,10 @@ type geometry struct {
 	dividerYStart int // first row of the horizontal divider strip (vertical only)
 
 	// shared
-	bodyH           int // body rows (excludes the 1 status row at m.height-1)
+	bodyH           int // body rows (excludes the header at top + the status row at m.height-1)
 	listTop         int // index of the first visible list entry
-	firstRow        int // screen Y of the first body row — always 0 (no top border)
-	previewFirstRow int // screen Y of the first preview content row (horizontal: 0; vertical: topInner+dividerHeight)
+	firstRow        int // screen Y of the first body row — = headerH (below the path header)
+	previewFirstRow int // screen Y of the first preview content row (horizontal: firstRow; vertical: firstRow+topInner+dividerHeight)
 }
 
 // layout picks 2-col or 1-col stacked purely from m.width — `vertical` is NEVER
@@ -58,7 +61,7 @@ type geometry struct {
 // The threshold (widthBreakpoint=80) is single (no hysteresis) at v1 (D6); the
 // drag-mid-flip flush is handled separately in Update's WindowSizeMsg case.
 func (m model) layout() geometry {
-	bodyH := max(m.height-1, 3) // status(1); body fills the rest
+	bodyH := max(m.height-1-headerH, 3) // header(top) + status(bottom); body fills the rest
 
 	if m.width < widthBreakpoint {
 		// 1-col stacked. Borderless → list/divider/preview share bodyH directly;
@@ -72,17 +75,18 @@ func (m model) layout() geometry {
 			bodyH:           bodyH,
 			topInner:        topInner,
 			bottomInner:     bodyH - topInner - dividerHeight,
-			dividerYStart:   topInner, // glyph row Y (0-indexed)
+			dividerYStart:   headerH + topInner, // glyph row screen-Y (below the header)
 			listTop:         m.listTopFor(topInner),
-			firstRow:        0,
-			previewFirstRow: topInner + dividerHeight,
+			firstRow:        headerH,
+			previewFirstRow: headerH + topInner + dividerHeight,
 		}
 	}
 
-	// 2-col side-by-side — geometry shape unchanged from the borderless rewrite
-	// (PRD docs/prd-middle-divider.md §5.2); only the explicit `vertical: false`
-	// + `previewFirstRow: 0` are new, kept here for parity with the vertical
-	// branch so a reader does not have to infer zero values.
+	// 2-col side-by-side. firstRow = previewFirstRow = headerH: both panes start
+	// at the first body row below the header, with no vertical divider on the Y
+	// axis (the divider is a column here). The X-axis fields not set above
+	// (topInner / bottomInner / dividerYStart) stay zero — horizontal mode has
+	// no Y split inside the body.
 	leftInner := m.leftInnerWidth()
 	return geometry{
 		vertical:        false,
@@ -91,8 +95,8 @@ func (m model) layout() geometry {
 		dividerStart:    leftInner,
 		bodyH:           bodyH,
 		listTop:         m.listTopFor(bodyH),
-		firstRow:        0,
-		previewFirstRow: 0,
+		firstRow:        headerH,
+		previewFirstRow: headerH,
 	}
 }
 
@@ -116,6 +120,18 @@ const (
 	// which is the dominant "lazyexplorer beside an agent" pose this feature
 	// is designed for. PRD §1 and §5.1.
 	widthBreakpoint = 80
+
+	// headerH is the height (rows) of the always-visible top header carrying the
+	// root-relative current path (prd-cwd-path-header). It is the single knob
+	// that shifts the whole body down by one row: layout() reserves it at the top
+	// (firstRow = headerH) and excludes it from bodyH (m.height-1-headerH), and
+	// every Y-origin field (previewFirstRow, dividerYStart) carries it so render
+	// and mouse hit-testing agree. setTopFromY (model.go) reads this same const
+	// to invert a screen-Y drag back through the offset — they must never drift,
+	// hence one source. Exactly 1: headerStyle paints no border, so the strip is
+	// a single screen row (a bordered header would render an extra row and break
+	// the off-by-one invariant).
+	headerH = 1
 
 	// Divider geometry — 3 cols total: [pad-left][glyph][pad-right]. The two
 	// pad cols widen the drag hit-zone (FR4/D5) without painting a heavier
@@ -346,7 +362,13 @@ func (m model) View() tea.View {
 
 			body = lipgloss.JoinHorizontal(lipgloss.Top, left, divider, right)
 		}
-		content = strings.Join([]string{body, m.renderStatus()}, "\n")
+		// header(row 0) + body + status(last row). strings.Join (not JoinVertical)
+		// keeps each block's own width: JoinVertical left-pads every line to the
+		// widest block, which would add trailing spaces to short prompt-mode
+		// status lines and churn snapshots. The header is already padded to
+		// m.width by renderHeader, the body by its pane styles, and the status by
+		// statusBarStyle.Width — so plain newline joining aligns them.
+		content = strings.Join([]string{m.renderHeader(m.width), body, m.renderStatus()}, "\n")
 
 		// Floating modal overlay (palette / help) drawn OVER the screen.
 		if box, ok := m.renderModal(); ok {
@@ -765,6 +787,46 @@ func lineWidth(line string) int {
 // so must be handled ANSI-aware rather than rune-sliced.
 func hasANSI(s string) bool { return strings.Contains(s, "\x1b") }
 
+// headerPath is the string the top header shows, mode-aware (prd-cwd-path-header).
+// In modeNormal it is the current directory's path RELATIVE to the jail root,
+// prefixed with the root's basename so the user always sees a named anchor:
+// at root it is just "<root-base>" (relRoot == "."); below root it is
+// "<root-base>/<rel-slash>" (e.g. "lazyexplorer/src/auth"). Slash-form on every
+// OS (relRoot already uses filepath.ToSlash) so the header never leaks a
+// backslash. In the flat-list modes (modeSearch / modeChanges) the list is a
+// root-relative RESULT set, not a directory — showing the cwd there would lie
+// about "current directory", so the header shows a mode label instead.
+func (m model) headerPath() string {
+	switch m.mode {
+	case modeSearch:
+		return "search results"
+	case modeChanges:
+		return "changes"
+	}
+	base := filepath.Base(m.root)
+	rel := relRoot(m.root, m.cwd)
+	if rel == "." {
+		return base
+	}
+	return base + "/" + rel
+}
+
+// renderHeader draws the 1-row top header at full width w: the mode-aware path
+// (headerPath), LEFT-truncated via fitPathRight so the deepest folder always
+// survives, styled by headerStyle (accent fg, no border, no background — a
+// single screen row, see headerH). The style's Width(w) pads the row out to the
+// full screen width so the strings.Join in View() aligns it above the body.
+func (m model) renderHeader(w int) string {
+	if w <= 0 {
+		return ""
+	}
+	// headerStyle has Padding(0,1); subtract its frame so the text fits the inner
+	// width and Width(w) does not wrap (lipgloss v2 .Width is the OUTER width —
+	// border+padding included; see CLAUDE.md Stack notes).
+	inner := w - headerStyle.GetHorizontalFrameSize()
+	return headerStyle.Width(w).Render(fitPathRight(m.headerPath(), inner))
+}
+
 // renderStatus is the footer: either a mode prompt or the keybind hints.
 func (m model) renderStatus() string {
 	switch m.mode {
@@ -1037,4 +1099,32 @@ func fitWidth(s string, w int) string {
 		r = r[:len(r)-1]
 	}
 	return string(r) + "…"
+}
+
+// fitPathRight is fitWidth's mirror for the header path: it keeps the TAIL of s
+// (the deepest folder — the one thing the header exists to show) and drops
+// LEADING runes, replacing them with a single "…". Where fitWidth answers
+// "what's the start of this?", fitPathRight answers "where am I?" — so a deep
+// "<base>/src/auth/handlers" narrows to "…/auth/handlers", never losing the
+// current folder off the right edge. Rune/width-aware (a CJK path keeps each
+// wide rune at 2 cols); the result's display width never exceeds w. The "…" is
+// itself 1 col, so once truncation kicks in we fit the tail into w-1 and prefix
+// the ellipsis. Pure — tested in isolation (TestFitPathRight).
+func fitPathRight(s string, w int) string {
+	if w <= 0 {
+		return ""
+	}
+	if lipgloss.Width(s) <= w {
+		return s
+	}
+	if w == 1 {
+		return "…"
+	}
+	// Reserve 1 col for the leading "…"; keep as many trailing runes as fit in
+	// w-1. Drop from the FRONT (r = r[1:]) until the remainder fits.
+	r := []rune(s)
+	for len(r) > 0 && lipgloss.Width(string(r)) > w-1 {
+		r = r[1:]
+	}
+	return "…" + string(r)
 }

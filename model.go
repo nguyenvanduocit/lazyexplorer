@@ -1282,11 +1282,12 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseWheelMsg:
-		// Wheel over the divider is a noop (FR9). Without this guard, the
-		// axis-aware overList split below would route divider-zone wheel
-		// events into the list pane (horizontal: divider cols; vertical:
-		// divider band rows).
-		if overDivider {
+		// Wheel over the header (e.Y < g.firstRow) or the divider is a noop. The
+		// header is passive chrome (prd-cwd-path-header). Without these guards the
+		// axis-aware overList split below would route a header/divider-zone wheel
+		// event into the list pane (horizontal: divider cols; vertical: divider
+		// band rows or the header row).
+		if e.Y < g.firstRow || overDivider {
 			return m, nil
 		}
 		overList := false
@@ -1320,10 +1321,11 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	case tea.MouseClickMsg:
 		// Divider drag start: a left-press anywhere in the divider's hit-zone
 		// starts a drag and snaps the glyph to the cursor (col in horizontal,
-		// row in vertical). Excluding the status row (m.height-1) means a
-		// click on the status text whose X/Y happens to fall in the divider
-		// band doesn't accidentally start a drag.
-		if e.Button == tea.MouseLeft && e.Y < m.height-1 && overDivider {
+		// row in vertical). The Y bounds exclude BOTH the header (e.Y >=
+		// g.firstRow) and the status row (e.Y < m.height-1): in horizontal mode
+		// overDivider is X-only, so without the header guard a header-row click
+		// in a divider column would wrongly start a drag.
+		if e.Button == tea.MouseLeft && e.Y >= g.firstRow && e.Y < m.height-1 && overDivider {
 			m.dragging = true
 			if g.vertical {
 				m.setTopFromY(e.Y)
@@ -1340,6 +1342,13 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		// must never route to list or preview (FR7). It also must not change
 		// focus, so this returns before the focus-set below.
 		if overDivider {
+			return m, nil
+		}
+		// The header row (e.Y < g.firstRow) is passive chrome (prd-cwd-path-header):
+		// a "no-pane" zone like the divider and the status row. A click on it must
+		// not route into a pane OR flip focus, so it returns before the focus-set
+		// below — mirroring the overDivider noop above.
+		if e.Y < g.firstRow {
 			return m, nil
 		}
 		overList := false
@@ -1398,16 +1407,19 @@ func (m *model) setLeftFromX(x int) {
 }
 
 // setTopFromY is setLeftFromX's Y-axis mirror for the 1-col stacked layout:
-// row y becomes dividerYStart, so topRatio = y / bodyH (no +1 — the
-// post-borderless semantics treat the cursor row directly as the divider row,
-// same discipline as setLeftFromX). Stored as a ratio so the split stays
-// proportional across terminal height resizes (topInnerHeight does the clamp).
+// the screen row y becomes the divider glyph row, so topRatio = (y-headerH) /
+// bodyH. Both terms carry the header offset — this is the exact INVERSE of
+// layout's dividerYStart = headerH + topInner: the header shifts the body down,
+// so a screen-Y drag must subtract headerH to recover the body-relative row,
+// and bodyH excludes BOTH the header and the status row (must equal layout's
+// bodyH or the divider would jump under the user's finger). Stored as a ratio
+// so the split stays proportional across resizes (topInnerHeight does the clamp).
 func (m *model) setTopFromY(y int) {
-	bodyH := max(m.height-1, 3)
+	bodyH := max(m.height-1-headerH, 3)
 	if bodyH <= 0 {
 		return
 	}
-	m.topRatio = float64(y) / float64(bodyH)
+	m.topRatio = float64(y-headerH) / float64(bodyH)
 }
 
 // moveCursor nudges the list cursor by delta rows and refreshes the preview.
@@ -1451,10 +1463,11 @@ func (m *model) previewClick(y int, g geometry) {
 	}
 
 	top, bodyH := m.previewScroll()
-	// previewFirstRow is 0 in horizontal mode (preview starts at body top) and
-	// g.topInner+dividerHeight in vertical mode (preview starts after the list
-	// pane + the horizontal divider strip). Branching is centralised in
-	// layout(); previewClick stays orientation-agnostic.
+	// previewFirstRow is headerH in horizontal mode (preview starts at the first
+	// body row below the header) and headerH+topInner+dividerHeight in vertical
+	// mode (preview starts after the header + the list pane + the horizontal
+	// divider strip). Branching is centralised in layout(); previewClick stays
+	// orientation-agnostic.
 	row := y - g.previewFirstRow
 	if row < 0 || row >= bodyH {
 		return // outside the preview pane (status row, divider, or list pane area)

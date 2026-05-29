@@ -415,3 +415,70 @@ func TestDumpChangesViewFrames(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestDumpCwdHeaderFrames is the visual-verdict harness for the always-visible
+// path header (docs/prd-cwd-path-header.md §6 checklist 8). It writes ANSI
+// frames to $LAZYEXPLORER_DUMP_DIR so freeze/vhs can render them to images and
+// an agent (oh-my-claudecode:visual-verdict) can judge against the design intent:
+//
+//	header-root-90x24    — at the jail root: row 0 shows the root basename, accent
+//	                       foreground, NO border, NO background fill (must read as a
+//	                       floating label on the terminal, not a panel / double-frame);
+//	                       the list/divider/preview body starts at row 1, status last.
+//	header-deep-90x24    — a deep cwd that overflows the width: the header is
+//	                       left-truncated with a leading "…" and the CURRENT folder
+//	                       (the tail) survives; body still aligned below.
+//	header-vertical-60x20 — 1-col stacked (width < 80): header row 0 spans full
+//	                       width above the stacked list / "─" divider / preview;
+//	                       everything shifted down by exactly one row.
+//
+// Run with:
+//
+//	LAZYEXPLORER_DUMP_DIR=/tmp/le-header go test -run TestDumpCwdHeaderFrames .
+func TestDumpCwdHeaderFrames(t *testing.T) {
+	outDir := os.Getenv("LAZYEXPLORER_DUMP_DIR")
+	if outDir == "" {
+		t.Skip("set LAZYEXPLORER_DUMP_DIR to dump View() frames for visual verdict")
+	}
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// A deep tree so the header has a path to truncate, plus a couple of files
+	// so the panes have content behind the header.
+	dir := t.TempDir()
+	deep := filepath.Join(dir, "src", "auth", "handlers", "internal")
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, deep, "login.go", "package handlers\n\nfunc Login() {}\n")
+	mustWrite(t, deep, "logout.go", "package handlers\n")
+	mustWrite(t, dir, "README.md", "# Project\n")
+
+	// Frame: at root — header shows the root basename.
+	mRoot := modelAt(t, dir, 90, 24)
+	mRoot.renderStyle = "dark"
+	if err := os.WriteFile(filepath.Join(outDir, "header-root-90x24.ansi"), []byte(mRoot.View().Content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Frame: deep cwd — header left-truncates, the tail folder survives.
+	mDeep := modelAt(t, dir, 90, 24)
+	mDeep.renderStyle = "dark"
+	mDeep.cwd = deep
+	mDeep.reload()
+	mDeep.renderNow()
+	if err := os.WriteFile(filepath.Join(outDir, "header-deep-90x24.ansi"), []byte(mDeep.View().Content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Frame: vertical (1-col stacked) — header spans full width above the stack.
+	mVert := modelAt(t, dir, 60, 20)
+	mVert.renderStyle = "dark"
+	mVert.cwd = deep
+	mVert.reload()
+	mVert.renderNow()
+	if err := os.WriteFile(filepath.Join(outDir, "header-vertical-60x20.ansi"), []byte(mVert.View().Content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}

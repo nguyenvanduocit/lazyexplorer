@@ -41,11 +41,11 @@ func TestLayoutSnapshot(t *testing.T) {
 	if g.dividerStart != 37 {
 		t.Errorf("dividerStart = %d, want 37 (= leftInner)", g.dividerStart)
 	}
-	if g.bodyH != 29 {
-		t.Errorf("bodyH = %d, want 29 (m.height-1)", g.bodyH)
+	if want := 30 - 1 - headerH; g.bodyH != want {
+		t.Errorf("bodyH = %d, want %d (height-1-headerH)", g.bodyH, want)
 	}
-	if g.firstRow != 0 {
-		t.Errorf("firstRow = %d, want 0 (no top border)", g.firstRow)
+	if g.firstRow != headerH {
+		t.Errorf("firstRow = %d, want headerH=%d (below the path header)", g.firstRow, headerH)
 	}
 	if total := g.leftInner + dividerWidth + g.rightInner; total != m.width {
 		t.Errorf("leftInner + dividerWidth + rightInner = %d, want m.width=%d (geometry must tile)",
@@ -77,21 +77,22 @@ func TestLayoutAtNarrowWidthIsVertical(t *testing.T) {
 	if g.dividerStart != 0 {
 		t.Errorf("dividerStart = %d, want 0 (vertical mode)", g.dividerStart)
 	}
-	// bodyH = height - 1 = 29; topInner = round(29 * 0.33) = 10; dividerYStart = topInner.
-	if g.bodyH != 29 {
-		t.Errorf("bodyH = %d, want 29", g.bodyH)
+	// bodyH = height - 1 - headerH = 28; the body sits below the header, so the
+	// divider glyph row and the preview's first row both carry firstRow=headerH.
+	if want := 30 - 1 - headerH; g.bodyH != want {
+		t.Errorf("bodyH = %d, want %d", g.bodyH, want)
 	}
-	if g.dividerYStart != g.topInner {
-		t.Errorf("dividerYStart = %d, want topInner=%d (glyph row at top of preview pane)",
-			g.dividerYStart, g.topInner)
+	if g.dividerYStart != g.firstRow+g.topInner {
+		t.Errorf("dividerYStart = %d, want firstRow+topInner=%d (glyph row below the header)",
+			g.dividerYStart, g.firstRow+g.topInner)
 	}
 	if total := g.topInner + dividerHeight + g.bottomInner; total != g.bodyH {
 		t.Errorf("topInner(%d) + dividerHeight(%d) + bottomInner(%d) = %d, want bodyH=%d (geometry must tile)",
 			g.topInner, dividerHeight, g.bottomInner, total, g.bodyH)
 	}
-	if g.previewFirstRow != g.topInner+dividerHeight {
-		t.Errorf("previewFirstRow = %d, want topInner+dividerHeight=%d",
-			g.previewFirstRow, g.topInner+dividerHeight)
+	if g.previewFirstRow != g.firstRow+g.topInner+dividerHeight {
+		t.Errorf("previewFirstRow = %d, want firstRow+topInner+dividerHeight=%d",
+			g.previewFirstRow, g.firstRow+g.topInner+dividerHeight)
 	}
 }
 
@@ -215,9 +216,10 @@ func TestClickOnDividerInsideBodyNonLeftNoop(t *testing.T) {
 	}
 }
 
-// TestFolderClickRow0SelectsEntry0 is the regression test for firstRow=0:
-// previously the first body row sat at y=1 (after top border); now y=0 maps
-// directly to entries[0] of the folder preview. PRD §6 checklist 8.
+// TestFolderClickRow0SelectsEntry0 pins the folder-preview hit-test against the
+// preview's first body row: with the path header reserving firstRow=headerH
+// rows at the top, the first preview row sits at Y=g.previewFirstRow and maps to
+// previewEntries[0]. PRD prd-cwd-path-header §6.
 func TestFolderClickRow0SelectsEntry0(t *testing.T) {
 	root := t.TempDir()
 	sub := filepath.Join(root, "sub")
@@ -235,10 +237,10 @@ func TestFolderClickRow0SelectsEntry0(t *testing.T) {
 	}
 
 	g := m.layout()
-	// X past the divider, Y at the first body row (0).
+	// X past the divider, Y at the first preview body row (= previewFirstRow).
 	nm, _ := m.handleMouse(tea.MouseClickMsg{
 		X:      g.dividerStart + dividerWidth + 5,
-		Y:      0,
+		Y:      g.previewFirstRow,
 		Button: tea.MouseLeft,
 	})
 	m = nm.(model)
@@ -246,13 +248,13 @@ func TestFolderClickRow0SelectsEntry0(t *testing.T) {
 		t.Errorf("after click: cwd = %q, want %q", m.cwd, sub)
 	}
 	if got := m.entries[m.cursor].name; got != "aaa.txt" {
-		t.Errorf("after click on y=0: cursor on %q, want \"aaa.txt\"", got)
+		t.Errorf("after click on previewFirstRow: cursor on %q, want \"aaa.txt\"", got)
 	}
 }
 
-// TestListClickRow0SelectsEntry0 mirrors the folder regression on the list
-// pane side: click y=0 in the list pane → cursor on entries[0] (previously
-// would have been entries[-1] / noop because firstRow=1 was subtracted).
+// TestListClickRow0SelectsEntry0 mirrors the folder hit-test on the list pane:
+// a click at the first list body row (Y=g.firstRow, below the path header) maps
+// to entries[0].
 func TestListClickRow0SelectsEntry0(t *testing.T) {
 	root := t.TempDir()
 	mustWrite(t, root, "aaa.txt", "x")
@@ -264,10 +266,10 @@ func TestListClickRow0SelectsEntry0(t *testing.T) {
 	if g.dividerStart < 5 {
 		t.Fatalf("setup: dividerStart=%d too small to put a list-pane click at X=2", g.dividerStart)
 	}
-	nm, _ := m.handleMouse(tea.MouseClickMsg{X: 2, Y: 0, Button: tea.MouseLeft})
+	nm, _ := m.handleMouse(tea.MouseClickMsg{X: 2, Y: g.firstRow, Button: tea.MouseLeft})
 	m = nm.(model)
 	if got := m.entries[m.cursor].name; got != "aaa.txt" {
-		t.Errorf("list pane click y=0: cursor on %q, want \"aaa.txt\"", got)
+		t.Errorf("list pane click at Y=firstRow: cursor on %q, want \"aaa.txt\"", got)
 	}
 }
 
@@ -313,36 +315,36 @@ func TestYDividerHitZoneIsExactlyGlyphRow(t *testing.T) {
 }
 
 // TestYDividerDrag walks the full press → motion → release cycle on the Y
-// axis. Under post-borderless setTopFromY semantics, a press at row y snaps
-// dividerYStart to y → topRatio = y / bodyH.
+// axis. setTopFromY maps a SCREEN row y back through the header offset:
+// topRatio = (y-headerH) / bodyH, where bodyH = height-1-headerH (the inverse
+// of layout's dividerYStart = headerH + topInner).
 func TestYDividerDrag(t *testing.T) {
 	m := model{width: 70, height: 24, leftRatio: 0.38, topRatio: 0.33, tel: noopRecorder{}}
 	g := m.layout()
 	if !g.vertical {
 		t.Fatalf("setup: g.vertical = false, want true at width=70")
 	}
-	if g.dividerYStart != 8 {
-		t.Fatalf("setup: dividerYStart = %d, want 8 (round(23 * 0.33))", g.dividerYStart)
-	}
+	bodyH := float64(24 - 1 - headerH)
 
 	step := func(msg tea.MouseMsg) {
 		nm, _ := m.handleMouse(msg)
 		m = nm.(model)
 	}
 
-	// Press on the glyph row. topRatio = 8/23 ≈ 0.348.
-	step(tea.MouseClickMsg{X: 5, Y: 8, Button: tea.MouseLeft})
+	// Press on the glyph row (a screen Y in the divider band, below the header).
+	pressY := g.dividerYStart
+	step(tea.MouseClickMsg{X: 5, Y: pressY, Button: tea.MouseLeft})
 	if !m.dragging {
 		t.Fatal("press on Y divider did not start a drag")
 	}
-	wantPress := 8.0 / 23.0
+	wantPress := float64(pressY-headerH) / bodyH
 	if m.topRatio != wantPress {
-		t.Errorf("after press at Y=8: topRatio = %.6f, want %.6f", m.topRatio, wantPress)
+		t.Errorf("after press at Y=%d: topRatio = %.6f, want %.6f", pressY, m.topRatio, wantPress)
 	}
 
-	// Drag down: motion to Y=12 → topRatio = 12/23.
+	// Drag down: motion to Y=12 → topRatio = (12-headerH) / bodyH.
 	step(tea.MouseMotionMsg{X: 5, Y: 12, Button: tea.MouseLeft})
-	want := 12.0 / 23.0
+	want := float64(12-headerH) / bodyH
 	if m.topRatio != want {
 		t.Errorf("after drag down: topRatio = %.6f, want %.6f", m.topRatio, want)
 	}
@@ -414,8 +416,8 @@ func TestWheelInVerticalRoutesByY(t *testing.T) {
 	}
 }
 
-// TestVerticalListRow0Click: click at Y=0 in vertical mode selects entries[0]
-// (firstRow=0 in vertical too, no top border).
+// TestVerticalListRow0Click: click at the first list body row (Y=g.firstRow,
+// below the path header) in vertical mode selects entries[0].
 func TestVerticalListRow0Click(t *testing.T) {
 	root := t.TempDir()
 	mustWrite(t, root, "aaa.txt", "x")
@@ -428,10 +430,10 @@ func TestVerticalListRow0Click(t *testing.T) {
 		t.Fatalf("setup: not vertical at width=70")
 	}
 
-	nm, _ := m.handleMouse(tea.MouseClickMsg{X: 5, Y: 0, Button: tea.MouseLeft})
+	nm, _ := m.handleMouse(tea.MouseClickMsg{X: 5, Y: g.firstRow, Button: tea.MouseLeft})
 	m = nm.(model)
 	if got := m.entries[m.cursor].name; got != "aaa.txt" {
-		t.Errorf("vertical list pane click Y=0: cursor on %q, want \"aaa.txt\"", got)
+		t.Errorf("vertical list pane click at Y=firstRow: cursor on %q, want \"aaa.txt\"", got)
 	}
 }
 

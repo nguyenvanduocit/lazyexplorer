@@ -30,8 +30,10 @@ func TestPreviewClickOpensFolderAndSelects(t *testing.T) {
 		t.Fatalf("setup: cursor on %q, want \"sub\"", m.entries[m.cursor].name)
 	}
 
-	// Right panel listing starts at the first body row (y=0, firstRow=0). Click "file.txt".
-	nm, _ := m.handleMouse(tea.MouseClickMsg{X: 50, Y: 0, Button: tea.MouseLeft})
+	// Right panel listing starts at the first preview body row (Y=previewFirstRow,
+	// below the path header). Click "file.txt".
+	g := m.layout()
+	nm, _ := m.handleMouse(tea.MouseClickMsg{X: 50, Y: g.previewFirstRow, Button: tea.MouseLeft})
 	m = nm.(model)
 
 	if m.cwd != sub {
@@ -118,9 +120,10 @@ func TestPreviewClickScrolledMapsWithOffset(t *testing.T) {
 	}
 	m.scrollPreview(10) // previewTop → 10 (clamped below maxTop=11)
 
-	// First visible listing row is y=0 (firstRow=0). With top=10 it shows
-	// item 10 → file10.txt.
-	nm, _ := m.handleMouse(tea.MouseClickMsg{X: 50, Y: 0, Button: tea.MouseLeft})
+	// First visible listing row is Y=previewFirstRow (below the path header).
+	// With top=10 it shows item 10 → file10.txt.
+	g := m.layout()
+	nm, _ := m.handleMouse(tea.MouseClickMsg{X: 50, Y: g.previewFirstRow, Button: tea.MouseLeft})
 	m = nm.(model)
 
 	if m.cwd != big {
@@ -182,7 +185,8 @@ func TestPreviewClickOpensSubfolder(t *testing.T) {
 	}
 
 	m := modelAt(t, root, 100, 30) // cursor 0 = "parent", preview = its listing
-	nm, _ := m.handleMouse(tea.MouseClickMsg{X: 50, Y: 0, Button: tea.MouseLeft})
+	g := m.layout()
+	nm, _ := m.handleMouse(tea.MouseClickMsg{X: 50, Y: g.previewFirstRow, Button: tea.MouseLeft})
 	m = nm.(model)
 
 	if m.cwd != parent {
@@ -204,9 +208,10 @@ func TestPreviewClickEmptyFolderNoop(t *testing.T) {
 	}
 
 	m := modelAt(t, root, 100, 30) // cursor 0 = "empty"; preview = "(empty folder)"
+	g := m.layout()
 	wantCwd := m.cwd
 
-	nm, _ := m.handleMouse(tea.MouseClickMsg{X: 50, Y: 0, Button: tea.MouseLeft})
+	nm, _ := m.handleMouse(tea.MouseClickMsg{X: 50, Y: g.previewFirstRow, Button: tea.MouseLeft})
 	m = nm.(model)
 
 	if m.cwd != wantCwd {

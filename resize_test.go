@@ -208,15 +208,17 @@ func TestPreviewBodyWidthBranch(t *testing.T) {
 // preview pane's rows). previewScroll feeds renderPreview / scrollPreview /
 // previewClick, so a wrong branch silently breaks scroll math + click maps.
 func TestPreviewScrollBranch(t *testing.T) {
-	// Horizontal: bodyH=29.
+	// Horizontal: bodyH = height-1-headerH = 28.
 	mH := model{width: 100, height: 30, leftRatio: 0.38, topRatio: 0.33, tel: noopRecorder{}}
-	if _, h := mH.previewScroll(); h != 29 {
-		t.Errorf("horizontal previewScroll bodyH = %d, want 29 (= g.bodyH)", h)
+	wantH := mH.layout().bodyH
+	if _, h := mH.previewScroll(); h != wantH {
+		t.Errorf("horizontal previewScroll bodyH = %d, want %d (= g.bodyH)", h, wantH)
 	}
-	// Vertical: bodyH=29, topInner=round(29*0.33)=10, bottomInner=29-10-1=18.
+	// Vertical: previewScroll returns g.bottomInner (the preview pane's own rows).
 	mV := model{width: 70, height: 30, leftRatio: 0.38, topRatio: 0.33, tel: noopRecorder{}}
-	if _, h := mV.previewScroll(); h != 18 {
-		t.Errorf("vertical previewScroll bodyH = %d, want 18 (= g.bottomInner)", h)
+	wantV := mV.layout().bottomInner
+	if _, h := mV.previewScroll(); h != wantV {
+		t.Errorf("vertical previewScroll bodyH = %d, want %d (= g.bottomInner)", h, wantV)
 	}
 }
 
@@ -240,11 +242,12 @@ func TestStateRatiosPersistAcrossModeFlips(t *testing.T) {
 		t.Fatalf("after shrink to 70: lastVertical = false, want true")
 	}
 
-	// User drags Y-divider in 1-col to topRatio=0.5. bodyH = 23 → y=12 → ratio≈0.522.
+	// User drags Y-divider in 1-col. setTopFromY maps the screen row 12 back
+	// through the header offset: topRatio = (12-headerH) / (height-1-headerH).
 	m.setTopFromY(12)
-	wantTop := 12.0 / 23.0
+	wantTop := float64(12-headerH) / float64(24-1-headerH)
 	if m.topRatio != wantTop {
-		t.Fatalf("setup: setTopFromY(12)/bodyH=23 → topRatio = %.6f, want %.6f", m.topRatio, wantTop)
+		t.Fatalf("setup: setTopFromY(12) → topRatio = %.6f, want %.6f", m.topRatio, wantTop)
 	}
 
 	// Widen back above threshold — mode flip to horizontal.

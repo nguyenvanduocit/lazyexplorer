@@ -327,9 +327,9 @@ func TestClickSetsFocus(t *testing.T) {
 		t.Errorf("click in preview pane: focus = %v, want focusPreview", nm.(model).focusPane)
 	}
 
-	// Click in the list pane → focusList.
+	// Click in the list pane (at the first body row, below the header) → focusList.
 	m.focusPane = focusPreview
-	nm, _ = m.handleMouse(tea.MouseClickMsg{X: 2, Y: 0, Button: tea.MouseLeft})
+	nm, _ = m.handleMouse(tea.MouseClickMsg{X: 2, Y: g.firstRow, Button: tea.MouseLeft})
 	if nm.(model).focusPane != focusList {
 		t.Errorf("click in list pane: focus = %v, want focusList", nm.(model).focusPane)
 	}

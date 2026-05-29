@@ -91,6 +91,18 @@ var (
 	// colAccent as the cursor row and the render spinner.
 	dividerFocusStyle = lipgloss.NewStyle().Foreground(colAccent)
 
+	// headerStyle draws the always-visible top header row carrying the
+	// root-relative current path (prd-cwd-path-header). It is EXACTLY one row:
+	// accent foreground, one col of left/right padding, and — per the crush note
+	// in CLAUDE.md — NO border and NO background, so the strip floats on the
+	// terminal without reading as a panel and never spends a second row (a
+	// border/BorderBottom would render an extra row and desync firstRow). The
+	// one accent matches the cursor row, divider glow, and render spinner.
+	headerStyle = lipgloss.NewStyle().
+			Foreground(colAccent).
+			Bold(true).
+			Padding(0, 1)
+
 	statusBarStyle = lipgloss.NewStyle().
 			Background(lipgloss.Color("#1E1E2E")).
 			Foreground(lipgloss.Color("#ADB5BD")).
