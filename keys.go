@@ -46,9 +46,10 @@ type KeyMap struct {
 	// Modes
 	FocusToggle    key.Binding // Tab — focusList ↔ focusPreview (prd-pane-focus)
 	Search         key.Binding // / — recursive fuzzy search (prd-search)
+	Changes        key.Binding // c — changed-only aggregate view (prd-changed-only-view)
 	CommandPalette key.Binding // ctrl+p — command palette (this PRD)
 	FullHelp       key.Binding // ? — full-help overlay (this PRD)
-	Back           key.Binding // esc — focusPreview→list / palette close / help close
+	Back           key.Binding // esc — focusPreview→list / palette close / help close / changes close
 
 	// Misc
 	Yank key.Binding // y — copy the selection's project-relative path (prd-yank-relative-path)
@@ -91,6 +92,7 @@ func defaultKeyMap() KeyMap {
 
 		FocusToggle:    key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "switch focus")),
 		Search:         key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")),
+		Changes:        key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "changes")),
 		CommandPalette: key.NewBinding(key.WithKeys("ctrl+p"), key.WithHelp("ctrl+p", "commands")),
 		FullHelp:       key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 		Back:           key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),

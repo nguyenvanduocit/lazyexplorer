@@ -366,17 +366,21 @@ func (m model) View() tea.View {
 // same routine so the two panes can never drift in format.
 func (m model) renderList(w, h int) string {
 	if len(m.entries) == 0 {
+		// In the changed-only view an empty list means a clean tree — answer the
+		// "what changed?" question with "nothing", not the misleading directory
+		// placeholder (the user is not looking at a directory here).
+		if m.mode == modeChanges {
+			return dimStyle.Render(fitWidth("(no changes)", w))
+		}
 		return dimStyle.Render(fitWidth("(empty directory)", w))
 	}
 
 	top := m.listTopFor(h)
 	listFocused := m.focusPane == focusList
-	// Git indicator base: list rows live in cwd, except in search mode where each
-	// entry name is a path relative to the jail root (resolve against root then).
-	base := m.cwd
-	if m.mode == modeSearch {
-		base = m.root
-	}
+	// Git indicator base: list rows live in cwd, except in the flat-list modes
+	// (search/changes) where each entry name is a path relative to the jail root
+	// (resolve against root then). previewBaseDir is the single source of that base.
+	base := m.previewBaseDir()
 	var b strings.Builder
 	for i := top; i < len(m.entries) && i < top+h; i++ {
 		ind := m.indicatorFor(base, m.entries[i])
@@ -786,6 +790,19 @@ func (m model) renderStatus() string {
 			return p + " " + dimStyle.Render(m.statusMsg)
 		}
 		return p
+	case modeChanges:
+		// Changed-only view: the status bar carries the change-relevant hints
+		// (move / open / back) sourced from the keymap, plus the "(no changes)" or
+		// any other statusMsg. The mutation hints (rename/delete) are deliberately
+		// absent — they are meaningless on an aggregate row (the row is a pointer to
+		// a change, not an editable list entry). Hints come from the keymap so they
+		// never drift from the bindings.
+		hints := renderShortHelp([]key.Binding{m.keymap.MoveDown, m.keymap.OpenEntry, m.keymap.Back, m.keymap.Quit})
+		status := hints
+		if m.statusMsg != "" {
+			status = m.statusMsg + dimStyle.Render("   "+hints)
+		}
+		return statusBarStyle.Width(m.width).Render(fitWidth(status, m.width-2))
 	case modeCommandPalette:
 		// The prompt + command list + any submit error (cd jail-block) live in
 		// the modal box now; the status bar just carries the modal short-help.
@@ -997,7 +1014,7 @@ func (m model) fullHelp() [][]key.Binding {
 		{km.MoveUp, km.MoveDown, km.GoTop, km.GoBottom, km.OpenEntry, km.GoUp},
 		{km.PreviewScrollUp, km.PreviewScrollDown, km.PreviewHalfPageUp, km.PreviewHalfPageDown, km.PreviewJumpTop, km.PreviewJumpBottom, km.PreviewScrollLeft, km.PreviewScrollRight, km.PreviewHScrollHalfLeft, km.PreviewHScrollHalfRight, km.PreviewHScrollReset, km.PreviewToggleWrap, km.ToggleDiff},
 		{km.Rename, km.Delete, km.OpenInEditor},
-		{km.FocusToggle, km.Search, km.CommandPalette, km.FullHelp, km.Back},
+		{km.FocusToggle, km.Search, km.Changes, km.CommandPalette, km.FullHelp, km.Back},
 		{km.Yank, km.Quit},
 	}
 }

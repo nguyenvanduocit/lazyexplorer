@@ -2,8 +2,68 @@ package main
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
+
+// TestCommandViewChanges pins the palette twin "view changes" (prd-changed-only-view):
+// it appears in defaultCommands, and running it through the LIVE palette flow
+// (ctrl+p → filter → enter) leaves the model in modeChanges with the aggregate list —
+// the mouse/discoverability parity for the `c` key. Driving the full Update path is
+// the real contract: it catches the palette-close path clobbering the mode the
+// command established.
+func TestCommandViewChanges(t *testing.T) {
+	if !slices.ContainsFunc(defaultCommands(), func(c Command) bool { return c.Name == "view changes" }) {
+		t.Fatal(`"view changes" command not found in defaultCommands()`)
+	}
+
+	m := changesRepoModel(t, noopRecorder{})
+
+	// Open the palette, filter down to the changes command, run it.
+	m = dogPress(t, m, keyCtrl('p'))
+	if m.mode != modeCommandPalette {
+		t.Fatalf("ctrl+p did not open the palette (mode=%v)", m.mode)
+	}
+	for _, r := range "view chang" {
+		m = dogPress(t, m, keyRune(r))
+	}
+	if len(m.paletteFiltered) == 0 || m.paletteFiltered[m.paletteCursor].Name != "view changes" {
+		t.Fatalf("filtering 'view chang' did not select 'view changes'; filtered=%v cursor=%d",
+			commandNames(m.paletteFiltered), m.paletteCursor)
+	}
+	m = dogPress(t, m, keyEnter())
+
+	if m.mode != modeChanges {
+		t.Fatalf("after running 'view changes', mode = %v, want modeChanges", m.mode)
+	}
+	if !contains(rowNames(m.entries), "src/app.go") {
+		t.Errorf("view-changes command did not populate the aggregate list; rows=%v", rowNames(m.entries))
+	}
+}
+
+// TestCommandViewChangesNoOpOutsideRepo pins that the palette twin, like the `c`
+// key, is inert outside a git repo: running it leaves the model in normal mode.
+func TestCommandViewChangesNoOpOutsideRepo(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, root, "a.txt", "hi\n")
+	m := modelAt(t, root, 120, 30)
+	if m.git.repoRoot != "" {
+		t.Skip("temp dir unexpectedly inside a repo")
+	}
+	var viewCmd Command
+	for _, c := range defaultCommands() {
+		if c.Name == "view changes" {
+			viewCmd = c
+		}
+	}
+	viewCmd.Run(&m, "")
+	if m.mode != modeNormal {
+		t.Errorf("view-changes outside a repo must stay modeNormal; got %v", m.mode)
+	}
+	if !strings.Contains(m.statusMsg, "not a git repo") {
+		t.Errorf("view-changes outside a repo should explain why; status=%q", m.statusMsg)
+	}
+}
 
 // envStub returns a getenv func backed by a fixed map — lets a test set $VISUAL /
 // $EDITOR without mutating process state (so tests stay parallel-safe and never

@@ -346,3 +346,72 @@ func TestDumpResponsiveFrames(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestDumpChangesViewFrames is the visual-verdict harness for the changed-only
+// aggregate view (docs/prd-changed-only-view.md §6 checklist 10). It writes ANSI
+// frames to $LAZYEXPLORER_DUMP_DIR so freeze/vhs can render them to images and an
+// agent (oh-my-claudecode:visual-verdict) can judge:
+//
+//	changes-90x30   — the aggregate list: rows are "<badge> <root-rel path> <delta>",
+//	                  the colored badge + muted delta flush-right, paths flush-left;
+//	                  the right pane previews the diff of the selected change; the
+//	                  status bar shows move/open/back hints (no rename/delete).
+//	changes-diff-90x30 — cursor on a modified file; preview shows its diff hunk.
+//
+// Run with:
+//
+//	LAZYEXPLORER_DUMP_DIR=/tmp/le-changes go test -run TestDumpChangesViewFrames .
+func TestDumpChangesViewFrames(t *testing.T) {
+	outDir := os.Getenv("LAZYEXPLORER_DUMP_DIR")
+	if outDir == "" {
+		t.Skip("set LAZYEXPLORER_DUMP_DIR to dump View() frames for visual verdict")
+	}
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	repo := t.TempDir()
+	gitExec(t, repo, "init")
+	mustWrite(t, repo, "README.md", "# Project\n")
+	mustMkdir(t, repo, "src")
+	mustMkdir(t, repo, filepath.Join("src", "handlers"))
+	mustWrite(t, filepath.Join(repo, "src"), "app.go", "package src\n")
+	mustWrite(t, filepath.Join(repo, "src", "handlers"), "auth.go", "package handlers\n")
+	gitExec(t, repo, "add", ".")
+	gitExec(t, repo, "commit", "-m", "init")
+	// Spread changes across dirs: modify two, add an untracked deep file.
+	mustWrite(t, repo, "README.md", "# Project\n\nnow with docs\nand more\n")
+	mustWrite(t, filepath.Join(repo, "src"), "app.go", "package src\n\nfunc App() {}\nfunc Run() {}\n")
+	mustWrite(t, filepath.Join(repo, "src", "handlers"), "auth.go", "package handlers\n\nfunc Login() {}\n")
+	mustWrite(t, repo, "scratch.tmp", "untracked line one\nuntracked line two\n")
+
+	m := modelAt(t, repo, 90, 30)
+	m.renderStyle = "dark"
+	m.diffOn = true
+	if m.git.repoRoot == "" {
+		m.git.repoRoot = detectRepoRoot(m.root)
+		m.gitRootPrefix = repoRelPrefix(m.git.repoRoot, m.root)
+	}
+	state, _ := collectGitState(m.git.repoRoot, nil)
+	var tm tea.Model = m
+	tm, _ = tm.Update(gitRefreshedMsg{gen: m.gitGen, state: state})
+	tm, _ = tm.Update(tea.KeyPressMsg{Code: 'c', Text: "c"}) // open the changed-only view
+	m = tm.(model)
+	m.renderNow()
+	if err := os.WriteFile(filepath.Join(outDir, "changes-90x30.ansi"), []byte(m.View().Content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Move the cursor onto the nested modified file so the preview shows its diff.
+	for i, e := range m.entries {
+		if e.name == "src/handlers/auth.go" {
+			m.cursor = i
+		}
+	}
+	m.refreshPreview()
+	m.pendingWidth = 0
+	m.renderNow()
+	if err := os.WriteFile(filepath.Join(outDir, "changes-diff-90x30.ansi"), []byte(m.View().Content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}

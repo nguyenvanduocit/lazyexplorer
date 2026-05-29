@@ -22,10 +22,15 @@ func (m *model) enterCommandPalette() {
 }
 
 // exitCommandPalette closes the palette and clears its state back to zero. Mode
-// returns to normal; cwd/focus are untouched (the palette only edits them on a
-// committed Enter, never on close).
+// returns to normal UNLESS the command that just ran transitioned into another mode
+// (e.g. "view changes" → modeChanges): a command is run while mode is still
+// modeCommandPalette, so if it is no longer modeCommandPalette here the command has
+// taken over and we must not clobber its mode. cwd/focus are untouched (the palette
+// only edits them on a committed Enter, never on close).
 func (m *model) exitCommandPalette() {
-	m.mode = modeNormal
+	if m.mode == modeCommandPalette {
+		m.mode = modeNormal
+	}
 	m.paletteStage = 0
 	m.paletteQuery = ""
 	m.paletteSecondaryInput = ""

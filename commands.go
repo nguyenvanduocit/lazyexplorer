@@ -121,6 +121,22 @@ func defaultCommands() []Command {
 			},
 		},
 		{
+			Name: "view changes", Description: "list every working-tree change (jump to its diff)",
+			// Discoverability/mouse twin of the `c` key (prd-changed-only-view): both
+			// route through enterChanges, the single code path that snapshots state,
+			// derives the aggregate list, and records action.changes_view_open. Outside
+			// a git repo enterChanges is a no-op; the palette is an explicit entry point,
+			// so say why rather than close silently (mirror "open in editor"'s refusal).
+			Run: func(m *model, _ string) tea.Cmd {
+				if m.git.repoRoot == "" {
+					m.statusMsg = "⚠ not a git repo — nothing to list"
+					return nil
+				}
+				m.enterChanges()
+				return nil
+			},
+		},
+		{
 			Name: "cd", Description: "change directory (jail-guarded)", NeedsArg: true,
 			Run: func(m *model, path string) tea.Cmd {
 				target, err := resolvePath(m.cwd, path)

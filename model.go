@@ -90,9 +90,20 @@ const (
 	modeConfirmDelete
 	modeRename
 	modeSearch
+	modeChanges        // c — changed-only aggregate view (prd-changed-only-view)
 	modeCommandPalette // ctrl+p — pick/run a command (prd-keymap-and-command-palette)
 	modeHelp           // ? — full-help overlay
 )
+
+// flatListMode reports whether the current mode repurposes m.entries as a FLAT
+// list whose names are paths relative to the jail root (modeSearch's result list,
+// modeChanges' aggregate). The two share a surface, so the base-dir resolution
+// (entry name → file path, git key) is rel-to-root for both. Centralizing the
+// predicate keeps renderList / refreshPreview / previewBaseDir from drifting as a
+// second flat-list mode is added (consistency-is-kindness).
+func (m model) flatListMode() bool {
+	return m.mode == modeSearch || m.mode == modeChanges
+}
 
 // walkCacheTTL is how long a recursive walk stays fresh enough to reuse without
 // re-walking (PRD D8). Re-activating search within this window skips the walk
@@ -274,6 +285,18 @@ type model struct {
 	searchSavedCursor  int
 	searchSavedListTop int
 
+	// Changed-only aggregate view (modeChanges, prd-changed-only-view). It mirrors
+	// modeSearch's flat-list surface (no query box), so the pre-view state is
+	// snapshotted here and restored on Esc (exactly like the search saved-state
+	// above). The row list is re-derived from m.git.changes at enter-time and on
+	// each git-snapshot apply (refreshChanges) — NOT every render — matching
+	// search's snapshot semantics so the selection stays put under a live refresh.
+	changesSavedCwd     string
+	changesSavedEntries []entry
+	changesSavedFsSig   uint64
+	changesSavedCursor  int
+	changesSavedListTop int
+
 	// Key bindings — the single source of truth for key codes + help text
 	// (prd-keymap-and-command-palette). Set once in newModel; updateNormal and the
 	// help/status renderers match against it instead of literal key strings.
@@ -400,11 +423,11 @@ func (m model) indicatorFor(baseDir string, e entry) *rowIndicator {
 
 // previewBaseDir is the directory the selected entry's git key resolves against.
 // It mirrors the base refreshPreview already uses for the file path: the cwd in
-// normal mode, the jail root in search mode (where each entry name is a path
-// relative to root). diffApplies + diffRelPath read it so the diff key matches the
-// path readPreviewBytes opened.
+// normal mode, the jail root in the flat-list modes (search/changes, where each
+// entry name is a path relative to root). diffApplies + diffRelPath read it so the
+// diff key matches the path readPreviewBytes opened.
 func (m model) previewBaseDir() string {
-	if m.mode == modeSearch {
+	if m.flatListMode() {
 		return m.root
 	}
 	return m.cwd
@@ -626,18 +649,25 @@ func (m *model) refreshPreview() {
 	m.previewIsDiff = false
 
 	if len(m.entries) == 0 {
+		// Mirror renderList's mode gate (view.go): in the changed-only view an empty
+		// list means a clean tree — the preview pane answers "what changed?" with
+		// "(no changes)", not the misleading directory placeholder (the user is not
+		// looking at a directory here). FR8/D9, prd-changed-only-view.
+		if m.mode == modeChanges {
+			m.preview = []string{dimStyle.Render("(no changes)")}
+			return
+		}
 		m.preview = []string{dimStyle.Render("(empty directory)")}
 		return
 	}
 	sel := m.entries[m.cursor]
-	// In search mode the entry name is a path relative to the jail root (e.g.
-	// "docs/prd-search.md"), so resolve it against root; otherwise it is a bare
-	// name in the current directory. One branch keeps the whole async preview
-	// pipeline (syncPreview/applyPreview, renderer registry) unchanged (FR7).
-	base := m.cwd
-	if m.mode == modeSearch {
-		base = m.root
-	}
+	// In the flat-list modes (search/changes) the entry name is a path relative to
+	// the jail root (e.g. "docs/prd-search.md"), so resolve it against root;
+	// otherwise it is a bare name in the current directory. One branch keeps the
+	// whole async preview pipeline (syncPreview/applyPreview, renderer registry)
+	// unchanged (FR7), and a changes-mode row previews its diff exactly like the
+	// list pane would (the diff state-select below reads previewBaseDir too).
+	base := m.previewBaseDir()
 	full := filepath.Join(base, sel.name)
 	if sel.isDir {
 		entries, err := previewDir(full)
@@ -1063,6 +1093,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.gen == m.gitGen {
 			m.git = msg.state
 			m.gitUntrackedCache = msg.cache
+			// While parked in the changed-only view, a fresh git snapshot must
+			// re-derive the aggregate list so an edit the agent JUST made appears
+			// without re-opening (prd-changed-only-view §5.2). refreshChanges keeps
+			// the cursor on the same change by name. Search's snapshot semantics are
+			// matched: the list is re-derived on a state APPLY, not every render.
+			if m.mode == modeChanges {
+				m.refreshChanges()
+			}
 		}
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -1096,6 +1134,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			nm, cmd = m.updateRename(msg)
 		case modeSearch:
 			nm, cmd = m.updateSearch(msg)
+		case modeChanges:
+			nm, cmd = m.updateChanges(msg)
 		case modeCommandPalette:
 			nm, cmd = m.updateCommandPalette(msg)
 		case modeHelp:
@@ -1643,6 +1683,14 @@ func (m model) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// cache miss (nil on a cache hit) — forward it so the async walk dispatches.
 	case key.Matches(msg, km.Search):
 		return m, m.enterSearch()
+
+	// Changes opens the changed-only aggregate view (prd-changed-only-view) — a mode
+	// switch like search, so it fires regardless of focusPane. Outside a git repo it
+	// is a NO-OP (enterChanges guards on repoRoot): nothing to list, git mode off.
+	// Inside a repo it snapshots state and derives the list synchronously from the
+	// in-memory git snapshot (no async work), so no Cmd is returned.
+	case key.Matches(msg, km.Changes):
+		m.enterChanges()
 
 	// Esc steps back: from preview-focus it returns to the list (D6/FR6). On the
 	// list it is a no-op (modeNormal has no other Esc behavior).

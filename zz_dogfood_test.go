@@ -177,7 +177,7 @@ func t1FindChangedFile(t *testing.T) {
 	}
 
 	t.Logf("[T1 find-changed-file] achievable=%v keystrokes=%d diff_now_achievable=%v", reached && previewed, keys, diffHunksShown)
-	t.Logf("[T1] friction: no jump-to-change exists; the dirty-folder ● rollup (present=%v) lets you breadcrumb down by hand — %d keys root→deep file, and that ONLY works because the ● points the way", rollup, keys)
+	t.Logf("[T1] friction: a single-key jump-to-change now EXISTS — `c` opens the changed-only aggregate view (T4), so a deep edit is one keypress + Enter away. The dirty-folder ● rollup (present=%v) still lets you breadcrumb down by hand — %d keys root→deep file — for the spatial-browse path; the two coexist", rollup, keys)
 	t.Logf("[T1] /goal proof: review-the-edit-in-pane is now reachable — landing on the modified auth.go shows its diff hunk in the preview (previewIsDiff=%v, '+func Login' visible=%v), no tab-away to `git diff` needed", m.previewIsDiff, diffHunksShown)
 	t.Logf("[T1] evidence: root view shows src/ row=%v with ● rollup=%v; manual descent l→(move to handlers)→l→(move to auth.go) lands cursor on %q, preview shows func Login=%v, as a diff hunk=%v", srcRow, rollup, currentName(m), previewed, diffHunksShown)
 
@@ -325,31 +325,41 @@ func t4SeeAllChanges(t *testing.T) {
 	state, _ := collectGitState(m.git.repoRoot, nil)
 	m = dogPressMsg(t, m, gitRefreshedMsg{gen: m.gitGen, state: state})
 
-	// The git layer KNOWS every change (state.changes is the full set), but the UI
-	// only surfaces it per-row in the CURRENT directory. From the root the user
-	// sees README.md's badge and a ● rollup on src/, but NOT src/app.go itself —
-	// it is one dir down. There is no changed-only filter and no aggregate list.
+	// From the root the per-row badges only cover the CURRENT directory: the user
+	// sees README.md's badge and a ● rollup on src/, but NOT src/app.go itself — it
+	// is one dir down. That rollup-only view is exactly what the changed-only view
+	// (`c`) now replaces with a flat aggregate.
 	rootView := seeContent(m)
 	seesReadmeChange := strings.Contains(rootView, "README.md")
 	seesSrcRollup := strings.Contains(rootView, "src/") && strings.Contains(rootView, rollupGlyph)
-	seesNestedChangeDirectly := strings.Contains(rootView, "app.go") // false: app.go is in src/
+	seesNestedChangeDirectly := strings.Contains(rootView, "app.go") // false at the root: app.go is in src/
 
-	// What a user reaches for to "list everything changed": the command palette.
-	// Drive it (1 key tried) and read the full command set — that list IS the
-	// evidence no changed-files view exists.
+	// THE NEW PATH: one keypress `c` opens the changed-only aggregate view — a flat
+	// list of EVERY working-tree change in the whole repo, regardless of directory.
 	keys := 0
-	m = dogPress(t, m, keyCtrl('p'))
+	m = dogPress(t, m, keyRune('c'))
 	keys++
-	paletteView := seeContent(m)
-	hasChangedView := strings.Contains(paletteView, "changed") || strings.Contains(paletteView, "diff") || strings.Contains(paletteView, "status")
-	cmds := paletteCommandNames()
+	hasChangedView := m.mode == modeChanges
+	listNames := entryNames(m)
+	// The aggregate lists the root change AND the nested change that the current-dir
+	// badges could only roll up onto src/ — the whole point of aggregation.
+	listsReadme := contains(listNames, "README.md")
+	listsNested := contains(listNames, "src/app.go")
 
-	// Count what the model knows vs what the root screen surfaces.
 	totalChanges := len(state.changes)
 
-	t.Logf("[T4 see-all-changes] achievable=%v keystrokes=%d (tried ctrl+p before concluding no changed-only view exists)", false, keys)
-	t.Logf("[T4] friction: git tracks all %d changes but the UI only shows badges for the CURRENT dir (nested changes collapse to a ● rollup you must descend into); no changed-only view/filter and no aggregate list exists", totalChanges)
-	t.Logf("[T4] evidence: root view sees README.md change=%v, src/ ● rollup=%v, nested app.go directly=%v; palette commands=%v contain a changed/diff/status view=%v", seesReadmeChange, seesSrcRollup, seesNestedChangeDirectly, cmds, hasChangedView)
+	t.Logf("[T4 see-all-changes] achievable=%v keystrokes=%d (press `c` — the changed-only aggregate view lists all %d changes in one keypress)", hasChangedView && listsReadme && listsNested, keys, totalChanges)
+	t.Logf("[T4] /goal proof: git tracks all %d changes; `c` now surfaces every one in a single flat list (README.md present=%v, the NESTED src/app.go present=%v) — no more breadcrumbing down ● rollups dir-by-dir", totalChanges, listsReadme, listsNested)
+	t.Logf("[T4] evidence: root view sees README.md change=%v, src/ ● rollup=%v, nested app.go directly=%v; after `c` mode=modeChanges=%v, aggregate list=%v", seesReadmeChange, seesSrcRollup, seesNestedChangeDirectly, hasChangedView, listNames)
+
+	// /goal proof guard (distinct from the build gate): the changed-only view must
+	// now exist and aggregate BOTH the root and the nested change.
+	if !hasChangedView {
+		t.Errorf("[T4] `c` must open the changed-only aggregate view (mode=%v)", m.mode)
+	}
+	if !listsReadme || !listsNested {
+		t.Errorf("[T4] the aggregate must list every change including the nested src/app.go the current-dir badges could only roll up; got %v", listNames)
+	}
 }
 
 // ----------------------------------------------------------------------------
