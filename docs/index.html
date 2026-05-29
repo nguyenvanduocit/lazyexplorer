@@ -33,7 +33,7 @@
     --bg-3:  #14141C;   /* code blocks, keycaps */
     --fg:    #E6E6E6;
     --fg-2:  #C2C5D0;
-    --dim:   #6C757D;   /* comments, muted */
+    --dim:   #7E8791;   /* comments, muted — lifted to clear 4.5:1 AA on the near-black grounds */
     --rule:  rgba(230,230,238,0.11);
     --rule-2:rgba(230,230,238,0.06);
 
@@ -76,6 +76,19 @@
   a { color: inherit; text-decoration: none; }
   .hl { color: var(--accent-2); }              /* emphasis = colour, never italic */
 
+  /* Keyboard focus — a visible ring on every interactive element (the UA default
+     reads as near-invisible on this near-black ground). Doubles as a non-colour cue. */
+  a:focus-visible, .txtbtn:focus-visible {
+    outline: 2px solid var(--accent-2); outline-offset: 3px; border-radius: 3px;
+  }
+  /* Inline / contextual text links underline on interaction so the link affordance
+     is never colour-only (colourblind-safe). The logo is intentionally excluded. */
+  .masthead-meta a:hover, .undermark a:hover, .colophon .note a:hover, .listing pre a:hover,
+  .masthead-meta a:focus-visible, .undermark a:focus-visible,
+  .colophon .note a:focus-visible, .listing pre a:focus-visible {
+    text-decoration: underline; text-underline-offset: 3px;
+  }
+
   .wrap { width: 100%; max-width: var(--maxw); margin: 0 auto; padding: 0 var(--gut); }
   .rec > *, .entries, .entry, .entry > *, .listing, .keys, .keyrow, .keyrow > * { min-width: 0; }
   .mono { font-family: var(--mono); }
@@ -87,15 +100,12 @@
     padding: 60px 0;
   }
   .rec > .idx { padding-top: 5px; font-size: 12.5px; line-height: 1.5; }
-  .rec > .idx .n { display: block; color: var(--accent); font-weight: 700; font-size: 15px; letter-spacing: 0.04em; }
+  .rec > .idx .n { display: block; color: var(--accent-2); font-weight: 700; font-size: 15px; letter-spacing: 0.04em; }
   .rec > .idx .lbl { display: block; color: var(--dim); margin-top: 4px; }
   @media (max-width: 720px) {
-    .rec, .hero { grid-template-columns: 1fr; gap: 16px; }
-    .rec { padding: 40px 0; }
-    .hero > .hmargin { display: none; }
+    .rec { grid-template-columns: 1fr; gap: 16px; padding: 40px 0; }
     .rec > .idx { display: flex; align-items: baseline; gap: 12px; }
     .rec > .idx .n, .rec > .idx .lbl { display: inline; margin: 0; }
-    h1, .lede { max-width: none; }   /* mono is wide — let the headline use the full column on small screens */
   }
 
   /* ───────────── Masthead — a prompt line, not a banner ───────────── */
@@ -108,7 +118,7 @@
     font-family: var(--disp); font-weight: 700; font-size: clamp(19px, 2.4vw, 24px);
     letter-spacing: -0.02em; color: var(--fg); display: inline-flex; align-items: center; gap: 10px;
   }
-  .logo .caret { color: var(--accent); font-size: 0.85em; }
+  .logo .caret { color: var(--accent-2); font-size: 0.85em; }
   .masthead-meta {
     font-size: 11.5px; line-height: 1.7; letter-spacing: 0.06em; text-align: right; color: var(--dim);
   }
@@ -123,7 +133,7 @@
     font-size: 12px; letter-spacing: 0.18em; text-transform: uppercase;
     color: var(--dim); margin-bottom: 24px;
   }
-  .kicker::before { content: "// "; color: var(--accent); }
+  .kicker::before { content: "// "; color: var(--accent-2); }
   h1 {
     font-family: var(--disp); font-weight: 700;
     font-size: clamp(26px, 5.2vw, 58px); line-height: 1.1; letter-spacing: -0.02em;
@@ -137,6 +147,14 @@
   .lede {
     margin-top: 28px; max-width: 68ch; font-size: clamp(15px, 1.9vw, 17.5px);
     line-height: 1.66; color: var(--fg-2);
+  }
+  /* Hero collapses to one column below the spine breakpoint. Declared after the
+     hero / h1 / .lede base rules above so this override wins at equal specificity
+     (a sibling block earlier in the source would lose the cascade). */
+  @media (max-width: 720px) {
+    .hero { grid-template-columns: 1fr; gap: 16px; }
+    .hero > .hmargin { display: none; }
+    h1, .lede { max-width: none; }   /* mono is wide — let the headline use the full width on small screens */
   }
 
   /* install line — a real prompt inset */
@@ -175,7 +193,7 @@
     margin-top: 20px; font-size: 12.5px; color: var(--dim);
     max-width: 90ch; line-height: 1.7;
   }
-  figcaption .cmt { color: var(--accent); }
+  figcaption .cmt { color: var(--accent-2); }
   figcaption b { color: var(--fg-2); font-weight: 500; }
 
   /* terminal window chrome — the title bar above each recording */
@@ -203,7 +221,7 @@
     font-family: var(--disp); font-weight: 700;
     font-size: clamp(20px, 2.8vw, 27px); line-height: 1.12; letter-spacing: -0.01em; color: var(--fg);
   }
-  .entry h3 .no { color: var(--accent); font-weight: 700; margin-right: 12px; }
+  .entry h3 .no { color: var(--accent-2); font-weight: 700; margin-right: 12px; }
   .entry p { max-width: 82ch; color: var(--fg-2); }
   .entry .demo {
     margin-top: 4px; font-size: 12.5px; color: var(--dim);
@@ -225,7 +243,7 @@
   .listing pre a { color: var(--blue); }
 
   .keys { margin-top: 36px; }
-  .keys .kh { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); padding-bottom: 10px; border-bottom: 1px solid var(--rule); }
+  .keys .kh { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent-2); padding-bottom: 10px; border-bottom: 1px solid var(--rule); }
   .keyrow { display: grid; grid-template-columns: 210px 1fr; gap: 16px; align-items: baseline; padding: 10px 0; border-bottom: 1px solid var(--rule-2); }
   .keyrow .ks { display: flex; gap: 5px; flex-wrap: wrap; }
   kbd { font-family: var(--mono); font-size: 12px; color: var(--fg-2); background: var(--bg-3); border: 1px solid var(--rule); border-bottom-color: rgba(0,0,0,0.5); border-radius: 4px; padding: 2px 7px; }
