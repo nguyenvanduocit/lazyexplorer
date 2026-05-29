@@ -97,22 +97,59 @@
   .rec {
     display: grid; grid-template-columns: var(--mcol) 1fr; gap: 0 var(--gut);
     border-top: 1px solid var(--rule);
-    padding: 60px 0;
+    padding: 32px 0 60px;
   }
   .rec > .idx { padding-top: 5px; font-size: 12.5px; line-height: 1.5; }
   .rec > .idx .n { display: block; color: var(--accent-2); font-weight: 700; font-size: 15px; letter-spacing: 0.04em; }
   .rec > .idx .lbl { display: block; color: var(--dim); margin-top: 4px; }
+
+  /* Section running-header — a pill that pins at the very top while you're inside a
+     section, then is replaced by the next section's pill as you scroll past: one slot,
+     label = the current section. Invisible until it pins (scroll-state) so in flow it
+     just reads as spacing, and it wears the same pill look as the masthead so the top
+     slot feels like a single header whose content swaps. Chromium 133+; elsewhere the
+     pill never appears and the page is unchanged (progressive enhancement). */
+  .rec > .sec-head {
+    grid-column: 1 / -1;
+    position: sticky; top: 0; z-index: 60;
+    margin-bottom: 18px; pointer-events: none;
+    container-type: scroll-state;
+  }
+  .sh-pill {
+    display: flex; align-items: center; justify-content: flex-start;
+    width: 100%; padding: 8px 20px; overflow: hidden;   /* full content width, like the masthead */
+    border: 1px solid transparent; border-radius: 14px; opacity: 0;
+    transition: opacity .3s ease, background-color .28s ease,
+                border-color .28s ease, box-shadow .28s ease;
+  }
+  .sh-inner {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-family: var(--disp); font-size: 14px; font-weight: 700; letter-spacing: -0.01em;
+    transform: translateX(-44px);   /* the label rests off to the left until the bar pins */
+    transition: transform .42s cubic-bezier(.2,.7,.2,1);   /* glides in from the left, page's own easing */
+  }
+  .sh-inner .caret { color: var(--accent-2); font-size: 0.8em; }
+  .sh-inner .sh-n  { color: var(--accent-2); }
+  .sh-inner .sh-sep { color: var(--dim); }
+  .sh-inner .sh-lbl { color: var(--fg-2); font-weight: 400; letter-spacing: 0.02em; }
   @media (max-width: 720px) {
     .rec { grid-template-columns: 1fr; gap: 16px; padding: 40px 0; }
     .rec > .idx { display: flex; align-items: baseline; gap: 12px; }
     .rec > .idx .n, .rec > .idx .lbl { display: inline; margin: 0; }
   }
 
-  /* ───────────── Masthead — a prompt line, not a banner ───────────── */
-  .masthead { padding: 22px 0 16px; }
+  /* ───────────── Masthead — a prompt line that pins as you scroll ───────────── */
+  .masthead {
+    padding: 18px 0 16px;
+    position: sticky; top: 0; z-index: 50;
+    container-type: scroll-state;   /* powers @container scroll-state(stuck) below */
+  }
   .masthead-inner {
     display: flex; align-items: center; justify-content: space-between; gap: 24px;
-    padding-bottom: 16px; border-bottom: 1px solid var(--rule);
+    padding: 0 0 16px; margin: 0 auto; max-width: 100%;
+    border: 1px solid transparent; border-bottom-color: var(--rule); border-radius: 0;
+    transition: max-width .28s ease, padding .28s ease, border-radius .28s ease,
+                border-color .28s ease, background-color .28s ease, box-shadow .28s ease;
   }
   .logo {
     font-family: var(--disp); font-weight: 700; font-size: clamp(19px, 2.4vw, 24px);
@@ -125,6 +162,23 @@
   .masthead-meta a { color: var(--blue); }
   .masthead-meta a:hover { color: var(--accent-2); }
   @media (max-width: 560px) { .masthead-meta { display: none; } }
+
+  /* Scroll-state enhancement (Chromium 133+): once the masthead pins to the top,
+     the bar collapses into a centred, translucent floating pill — theme-dark, not the
+     stock white. Browsers without scroll-state queries keep the plain sticky bar, so
+     the page degrades gracefully (progressive enhancement, no @supports needed). */
+  @container scroll-state(stuck: top) {
+    .masthead-inner, .sh-pill {
+      padding: 9px 20px;
+      border-color: var(--rule); border-radius: 14px;
+      background-color: rgba(12,12,19,0.82);
+      box-shadow: 0 10px 30px rgba(0,0,0,0.45), 0 0 0 1px rgba(125,86,244,0.10);
+      backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    }
+    .masthead-inner .meta-desc { display: none; }   /* drop the intro copy; keep logo + link */
+    .sh-pill { opacity: 1; }                         /* bar fades in once pinned */
+    .sh-inner { transform: none; }                   /* the label glides in from the left */
+  }
 
   /* ───────────── Hero ───────────── */
   .hero { padding: 60px 0 8px; display: grid; grid-template-columns: var(--mcol) 1fr; gap: 0 var(--gut); }
@@ -266,6 +320,7 @@
   .reveal.in { opacity: 1; transform: none; }
   @media (prefers-reduced-motion: reduce) {
     .rise, .reveal { opacity: 1; transform: none; animation: none; transition: none; }
+    .masthead-inner, .sh-pill, .sh-inner { transition: none; }   /* snap instead of animating */
     h1 .cur { animation: none; }
     html { scroll-behavior: auto; }
   }
@@ -275,13 +330,15 @@
 
 <div class="wrap">
 
+  <!-- masthead + hero share a top zone: the masthead pins only while you're in here,
+       then releases so each section's running-header owns the top slot below it. -->
+  <div class="top-zone">
   <!-- ───────────── Masthead ───────────── -->
   <header class="masthead">
     <div class="masthead-inner rise" style="animation-delay:.02s">
       <a class="logo" href="#top"><span class="caret">▶</span> lazyexplorer</a>
       <div class="masthead-meta">
-        A terminal file explorer<br />
-        for the vibe-code workflow<br />
+        <span class="meta-desc">A terminal file explorer<br />for the vibe-code workflow<br /></span>
         Open source · MIT · <a href="https://github.com/nguyenvanduocit/lazyexplorer" target="_blank" rel="noopener">GitHub&nbsp;↗</a>
       </div>
     </div>
@@ -329,9 +386,11 @@
     </figure>
    </div>
   </section>
+  </div><!-- /top-zone -->
 
   <!-- ───────────── 01 Why ───────────── -->
   <section class="rec" id="why">
+    <header class="sec-head"><span class="sh-pill"><span class="sh-inner"><span class="caret">▶</span><span class="sh-n">01</span><span class="sh-sep">·</span><span class="sh-lbl">why it exists</span></span></span></header>
     <div class="idx reveal"><span class="n">01</span><span class="lbl">why it exists</span></div>
     <div class="prose reveal">
       <p>Less tooling, not more.</p>
@@ -350,6 +409,7 @@
 
   <!-- ───────────── 02 Features ───────────── -->
   <section class="rec" id="features">
+    <header class="sec-head"><span class="sh-pill"><span class="sh-inner"><span class="caret">▶</span><span class="sh-n">02</span><span class="sh-sep">·</span><span class="sh-lbl">what it does</span></span></span></header>
     <div class="idx reveal"><span class="n">02</span><span class="lbl">what it does</span></div>
     <div class="entries">
       <article class="entry reveal">
@@ -427,6 +487,7 @@ badge = git status · muted +/- = lines changed · ● = a folder holding edits<
 
   <!-- ───────────── 03 Install ───────────── -->
   <section class="rec" id="install">
+    <header class="sec-head"><span class="sh-pill"><span class="sh-inner"><span class="caret">▶</span><span class="sh-n">03</span><span class="sh-sep">·</span><span class="sh-lbl">get it</span></span></span></header>
     <div class="idx reveal"><span class="n">03</span><span class="lbl">get it</span></div>
     <div class="reveal">
       <div class="listing">
