@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1525,6 +1526,50 @@ func (m *model) yankRelPath() {
 	m.statusMsg = "copied " + rel
 }
 
+// copyContent copies the previewed file's RAW text to the clipboard — the ONE code
+// path shared by the `Y` key (in updateNormal AND updateChanges) and the palette
+// twin, so telemetry records exactly once (prd-preview-copy D9/D10). It reads the
+// WHOLE file from disk at copy time, resolving the path the SAME way refreshPreview
+// does (previewBaseDir()+name, NOT selectedAbsPath which joins m.cwd) so it reads the
+// exact file shown — correct in both modeNormal and the flat-list modeChanges (where
+// names are root-relative, so previewBaseDir() is the jail root). os.ReadFile (NOT the
+// 256KB-capped readPreviewBytes) so the result is the true, complete content
+// regardless of render/diff/scroll. writeClipboard is synchronous (a one-shot pipe to
+// pbcopy), like yankRelPath, so no tea.Cmd. Guards mirror open-in-editor: refuse the
+// synthetic ".." and a directory (clipboard content is meaningless for them) and a
+// binary/image file (not text). An empty text file copies a valid empty string.
+func (m *model) copyContent() {
+	if len(m.entries) == 0 {
+		m.statusMsg = "⚠ nothing selected"
+		return
+	}
+	sel := m.entries[m.cursor]
+	if sel.name == ".." || sel.isDir {
+		m.statusMsg = "⚠ not a file"
+		return
+	}
+	// Resolve the path EXACTLY as refreshPreview does (model.go: base :=
+	// previewBaseDir(); full := filepath.Join(base, sel.name)) so copyContent reads the
+	// file the user is looking at — root-relative in the flat-list modes, cwd-relative
+	// otherwise. The ../dir guard above means we never need selectedAbsPath's ".." branch.
+	full := filepath.Join(m.previewBaseDir(), sel.name)
+	content, err := os.ReadFile(full)
+	if err != nil {
+		m.statusMsg = "⚠ " + err.Error()
+		return
+	}
+	if isBinary(content) {
+		m.statusMsg = "⚠ not text"
+		return
+	}
+	m.tel.Record("action.copy_content", map[string]any{"name": sel.name, "bytes": len(content)})
+	if err := writeClipboard(string(content)); err != nil {
+		m.statusMsg = "⚠ clipboard: " + err.Error()
+		return
+	}
+	m.statusMsg = "copied " + sel.name + " (" + strconv.Itoa(len(content)) + " bytes)"
+}
+
 func (m model) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	km := m.keymap
 
@@ -1690,6 +1735,14 @@ func (m model) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.focusPane == focusList {
 			m.yankRelPath()
 		}
+
+	// Y copies the previewed file's WHOLE raw text to the clipboard (prd-preview-copy
+	// D5) — UNLIKE yank (focusList-only), it fires at BOTH focuses: the previewed file
+	// is the cursor's selection whether the eye is on the list or the preview, and a
+	// no-op while reading the preview is the reflex trap. copyContent is the shared code
+	// path with the palette twin + the modeChanges dispatch (records telemetry once).
+	case key.Matches(msg, km.CopyContent):
+		m.copyContent()
 
 	// Search is a mode switch, not a list mutation — fires regardless of focusPane.
 	// enterSearch snapshots state (for Esc restore) and returns a walk Cmd on a

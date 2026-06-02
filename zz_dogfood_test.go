@@ -27,6 +27,7 @@ package main
 //   modelAt, searchModel, mustWrite, mustMkdir, gitExec, renderNow, walkTree.
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -69,6 +70,46 @@ func TestDogfoodBesideAgent(t *testing.T) {
 	t.Run("T5_new_file_appears", t5NewFileAppears)
 	t.Run("T6_open_in_editor_or_reveal", t6OpenInEditorOrReveal)
 	t.Run("T7_peek_then_back", t7PeekThenBack)
+	t.Run("T8_copy_content", t8CopyContent)
+}
+
+// ----------------------------------------------------------------------------
+// T8 — copy-content: the agent just edited a file; the user wants its WHOLE
+// content in the clipboard to paste a chunk into the chat. Now a 1-keystroke
+// `Y` (prd-preview-copy). The recorder is the content oracle (writeClipboard
+// fails without a helper); the recorded byte count must equal the on-disk file.
+// ----------------------------------------------------------------------------
+func t8CopyContent(t *testing.T) {
+	rec := &fieldRecorder{}
+	m := searchModel(t) // small tree; main.go is a real text file
+	m.tel = rec
+	moveCursorToAny(t, &m, "main.go")
+	full := filepath.Join(m.previewBaseDir(), "main.go")
+	want, err := os.ReadFile(full)
+	if err != nil {
+		t.Fatalf("[T8] read fixture: %v", err)
+	}
+
+	keys := 0
+	m = dogPress(t, m, keyRune('Y'))
+	keys++
+
+	fields, recorded := rec.last("action.copy_content")
+	if !recorded {
+		t.Fatalf("[T8] `Y` produced no action.copy_content record; status=%q events=%v", m.statusMsg, rec.names())
+	}
+	gotBytes, _ := fields["bytes"].(int)
+	capability := gotBytes == len(want)
+	copied := strings.HasPrefix(m.statusMsg, "copied ")
+	clipFail := strings.HasPrefix(m.statusMsg, "⚠ clipboard")
+
+	if gotBytes != len(want) {
+		t.Errorf("[T8] copied bytes = %d, want the WHOLE file %d (raw os.ReadFile, not capped/diff)", gotBytes, len(want))
+	}
+
+	t.Logf("[T8 copy-content] achievable=%v keystrokes=%d (press `Y` on the file — copies the whole raw text; the palette 'copy file content' twin is the alt path)", capability, keys)
+	t.Logf("[T8] resolved: `Y` copies the file's RAW content read fresh from disk (not the ANSI/diff preview, not the 256KB-capped preview read), so a paste into the agent chat is clean; recorded bytes=%d == on-disk %d", gotBytes, len(want))
+	t.Logf("[T8] evidence: ran `Y` with statusMsg=%q (copied=%v clipboardUnsupported=%v); action.copy_content{name=%v bytes=%d}", m.statusMsg, copied, clipFail, fields["name"], gotBytes)
 }
 
 // gitProjectModel builds a real git repo with one committed file, then modifies

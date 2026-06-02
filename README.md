@@ -18,6 +18,15 @@ go build -o lazyexplorer .
 ./lazyexplorer ./src     # explores ./src as the jail root
 ```
 
+## Copying content
+
+- `Y` copies the **whole** previewed file's raw text to the clipboard — the clean
+  source, never the colorized markdown/diff render — so it pastes straight into the
+  agent's chat. (`y` copies the file's project-relative path; the two are distinct.)
+- To grab just a **visible span**, let the terminal select it natively: hold **Shift**
+  (or **Option** on iTerm2 / macOS Terminal / tmux-on-macOS) while you drag the mouse.
+  The terminal owns that selection — lazyexplorer adds no in-app copy mode.
+
 For design rationale and contributor docs, see `docs/` and `CLAUDE.md`.
 
 ---

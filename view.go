@@ -1009,8 +1009,9 @@ func lerp8(a, b uint32, t float64) uint8 {
 }
 
 // renderHelpBody draws the full-help body for the modal: bindings grouped under
-// titles, scrolled by helpTop. The group order matches fullHelp; helpLineCount
-// counts the same lines so the scroll clamp never overshoots.
+// titles, then the native-selection footnote, scrolled by helpTop. The group order
+// matches fullHelp; helpLineCount counts the SAME lines (groups + helpNoteLines) so
+// the scroll clamp never overshoots and the footnote is never clamped off-screen.
 func (m model) renderHelpBody(w, h int) string {
 	titles := []string{"Navigation", "Preview", "Mutation", "Modes", "Misc"}
 	var lines []string
@@ -1026,9 +1027,27 @@ func (m model) renderHelpBody(w, h int) string {
 		}
 		lines = append(lines, "") // blank separator between groups
 	}
+	lines = append(lines, helpNoteLines(w)...)
 	start := min(max(0, m.helpTop), len(lines))
 	end := min(start+h, len(lines))
 	return strings.Join(lines[start:end], "\n")
+}
+
+// helpNoteLines is the native-selection footnote that closes the `?` overlay
+// (prd-preview-copy D11/FR12): Y copies the WHOLE file; to grab a visible SPAN, the
+// terminal selects natively when a modifier is held during drag — a terminal feature,
+// not an app one, so it is documented (zero app chrome) rather than re-implemented.
+// It is the SINGLE source of truth shared by renderHelpBody (which renders it) and
+// helpLineCount (which counts it), so the scroll clamp can never disagree with the
+// rendered line set. Each line is fitWidth'd to exactly one display row.
+func helpNoteLines(w int) []string {
+	return []string{
+		renderingStyle.Render("Selecting text"),
+		fitWidth("  Y copies the whole file. To select a visible", w),
+		fitWidth("  span, hold Shift (Option on iTerm2/macOS", w),
+		fitWidth("  Terminal/tmux-macOS) then drag — the terminal", w),
+		fitWidth("  selects natively, not the app.", w),
+	}
 }
 
 // renderShortHelp joins key bindings into a "[key] desc" hint string for the
@@ -1050,7 +1069,7 @@ func (m model) shortHelp() []key.Binding {
 	if m.focusPane == focusList {
 		return []key.Binding{
 			km.MoveDown, km.FocusToggle, km.OpenEntry, km.GoUp,
-			km.Rename, km.Delete, km.OpenInEditor, km.Yank,
+			km.Rename, km.Delete, km.OpenInEditor, km.Yank, km.CopyContent,
 			km.CommandPalette, km.FullHelp, km.Quit,
 		}
 	}
@@ -1077,7 +1096,7 @@ func (m model) fullHelp() [][]key.Binding {
 		{km.PreviewScrollUp, km.PreviewScrollDown, km.PreviewHalfPageUp, km.PreviewHalfPageDown, km.PreviewJumpTop, km.PreviewJumpBottom, km.PreviewScrollLeft, km.PreviewScrollRight, km.PreviewHScrollHalfLeft, km.PreviewHScrollHalfRight, km.PreviewHScrollReset, km.PreviewToggleWrap, km.ToggleDiff},
 		{km.Rename, km.Delete, km.OpenInEditor},
 		{km.FocusToggle, km.Search, km.Changes, km.CommandPalette, km.FullHelp, km.Back},
-		{km.Yank, km.Quit},
+		{km.Yank, km.CopyContent, km.Quit},
 	}
 }
 

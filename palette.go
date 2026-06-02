@@ -184,12 +184,14 @@ func (m model) updateHelp(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 // helpLineCount is the rendered help-body line count (group title + binding rows
-// + one blank separator per group) — the same number renderHelp produces, so the
-// scroll clamp here and the slice in renderHelp never disagree.
+// + one blank separator per group, then the native-selection footnote) — the same
+// number renderHelpBody produces, so the scroll clamp here and the slice in
+// renderHelpBody never disagree (the footnote is reachable by scroll, never clamped
+// off-screen). helpNoteLines returns a width-independent count, so passing 0 is safe.
 func (m model) helpLineCount() int {
 	n := 0
 	for _, group := range m.fullHelp() {
 		n += 1 + len(group) + 1 // title + rows + blank separator
 	}
-	return n
+	return n + len(helpNoteLines(0)) // + the footnote lines
 }

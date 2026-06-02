@@ -324,6 +324,57 @@ func TestHelpScrollClamps(t *testing.T) {
 	}
 }
 
+// TestHelpLineCountMatchesRenderedBody pins the invariant the palette.go comment
+// PROMISES but TestHelpScrollClamps cannot pin (it reads helpLineCount on both
+// sides of its assertion, so a desync moves both together and slips through):
+// helpLineCount() must equal the line count renderHelpBody actually emits — groups
+// + the native-selection footnote (view.go:1030). If it overcounts, the scroll
+// clamp overshoots into blanks; if it undercounts, the footnote is clamped
+// off-screen. The render height is a large CONSTANT, deliberately NOT helpLineCount()
+// — sizing by the quantity under test would re-clip end to an undercounted height and
+// pass tautologically, reproducing the very gap this guards (the undercount direction
+// is exactly the footnote-clamped-off case). 1000 dwarfs the ~30-line body, so
+// renderHelpBody never clips and the rendered line count is the true emitted count.
+// It also pins FR12: the footnote string ("Selecting text" / "hold Shift") must
+// actually render — it is appended AFTER the fullHelp group loop, so a fullHelp-only
+// assertion (TestCopyContentInFullHelpMisc) is structurally blind to it.
+func TestHelpLineCountMatchesRenderedBody(t *testing.T) {
+	m := modelAt(t, t.TempDir(), 100, 30)
+	// helpTop is 0 by default (help not yet opened/scrolled), so start=0 and the
+	// large h makes renderHelpBody emit every line: end == len(lines).
+	const tall = 1000
+	rendered := m.renderHelpBody(80, tall)
+	got := len(strings.Split(rendered, "\n"))
+	if want := m.helpLineCount(); got != want {
+		t.Errorf("renderHelpBody emitted %d lines, helpLineCount() = %d: the scroll-clamp invariant is broken (clamp would overshoot blanks or clip the footnote off-screen)", got, want)
+	}
+	if !strings.Contains(rendered, "Selecting text") {
+		t.Errorf("renderHelpBody output missing the 'Selecting text' footnote title (FR12); got:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "hold Shift") {
+		t.Errorf("renderHelpBody output missing the 'hold Shift' native-selection note (FR12); got:\n%s", rendered)
+	}
+}
+
+// TestHelpNoteFitsModalWidth pins FR12 readability: the native-selection footnote
+// must read cleanly inside the modal, with NO content clipped. The modal's inner
+// text area is modalTargetCols (56) minus the modalBoxStyle frame (4) = 52 cols,
+// and modalSize hands renderHelpBody exactly that at any terminal ≥ 60 wide. A bare
+// `lipgloss.Width(line) <= 52` check is a false-green proxy: fitWidth already
+// truncates to fit, so a clipped line still satisfies it. The real discriminator is
+// LOSS — fitWidth appends "…" (U+2026) only when it had to clip — so assert no note
+// line at the true modal width carries that marker. Each authored line must already
+// be <= 52 display cols so the modifier list (D2/D11) survives intact.
+func TestHelpNoteFitsModalWidth(t *testing.T) {
+	m := modelAt(t, t.TempDir(), 100, 30)
+	innerW, _ := m.modalSize()
+	for i, l := range helpNoteLines(innerW) {
+		if strings.Contains(l, "…") {
+			t.Errorf("helpNoteLines[%d] clipped at modal inner width %d (loses content, breaks FR12): %q", i, innerW, l)
+		}
+	}
+}
+
 // TestHelpQuitClosesNotExits: q inside help closes the overlay rather than
 // quitting the app (surprise avoidance).
 func TestHelpQuitClosesNotExits(t *testing.T) {
@@ -427,7 +478,7 @@ func TestPaletteBodyRenders(t *testing.T) {
 	if !strings.Contains(rows[1], "›") {
 		t.Errorf("palette body row 1 should be the '›' input prompt; got %q", rows[1])
 	}
-	for _, name := range []string{"reload", "copy absolute path", "copy relative path", "open in editor", "cd", "quit"} {
+	for _, name := range []string{"reload", "copy absolute path", "copy relative path", "copy file content", "open in editor", "cd", "quit"} {
 		if !strings.Contains(body, name) {
 			t.Errorf("palette body should list command %q; full:\n%s", name, body)
 		}
@@ -490,6 +541,71 @@ func TestCommandCopyRelative(t *testing.T) {
 		names := commandNames(defaultCommands())
 		if !slices.Contains(names, "copy absolute path") {
 			t.Errorf("the absolute-path capability was dropped; commands = %v", names)
+		}
+	})
+}
+
+// TestCommandCopyFileContent drives the palette twin's Run closure directly — the
+// discoverability sibling of the `Y` key (PRD D9/FR10). Both route through the SAME
+// copyContent helper, so this asserts the copy outcome via the telemetry oracle
+// (clipboard-agnostic) and proves the success status does NOT start with "⚠" (the
+// palette success-detect keys on that prefix, palette.go).
+func TestCommandCopyFileContent(t *testing.T) {
+	var copyCmd Command
+	for _, c := range defaultCommands() {
+		if c.Name == "copy file content" {
+			copyCmd = c
+		}
+	}
+	if copyCmd.Run == nil {
+		t.Fatal(`"copy file content" command not found in defaultCommands()`)
+	}
+
+	t.Run("text file copies its whole content, records once", func(t *testing.T) {
+		rec := &fieldRecorder{}
+		m := editorModel(t) // cwd = <root>/sub, holds main.go
+		m.tel = rec
+		selectEntry(t, &m, "main.go")
+		want, _ := os.ReadFile(filepath.Join(m.previewBaseDir(), "main.go"))
+
+		cmd := copyCmd.Run(&m, "")
+		if cmd != nil {
+			t.Errorf("copy file content: Run returned a cmd, want nil")
+		}
+		fields, recorded := rec.last("action.copy_content")
+		if !recorded {
+			t.Fatalf("palette twin must record action.copy_content; events=%v", rec.names())
+		}
+		if n, _ := fields["bytes"].(int); n != len(want) {
+			t.Errorf("recorded bytes = %d, want %d", n, len(want))
+		}
+		count := 0
+		for _, n := range rec.names() {
+			if n == "action.copy_content" {
+				count++
+			}
+		}
+		if count != 1 {
+			t.Errorf("palette twin recorded %d times, want exactly 1 (shared code path, D9)", count)
+		}
+		// On clipboard success the status must NOT start with "⚠" (palette detects
+		// success by the absence of that prefix).
+		if strings.HasPrefix(m.statusMsg, "copied ") && strings.HasPrefix(m.statusMsg, "⚠") {
+			t.Errorf("success status %q must not start with ⚠", m.statusMsg)
+		}
+	})
+
+	t.Run("empty listing is refused", func(t *testing.T) {
+		m := modelAt(t, t.TempDir(), 100, 30)
+		if len(m.entries) != 0 {
+			t.Fatalf("setup: expected empty listing, got %v", entryNames(m))
+		}
+		cmd := copyCmd.Run(&m, "")
+		if cmd != nil {
+			t.Errorf("empty: Run returned a cmd, want nil")
+		}
+		if m.statusMsg != "⚠ nothing selected" {
+			t.Errorf("empty: status = %q, want %q", m.statusMsg, "⚠ nothing selected")
 		}
 	})
 }

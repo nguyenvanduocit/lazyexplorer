@@ -51,6 +51,7 @@ func allKeyBindings(km KeyMap) map[string]key.Binding {
 		"FullHelp":                km.FullHelp,
 		"Back":                    km.Back,
 		"Yank":                    km.Yank,
+		"CopyContent":             km.CopyContent,
 		"Quit":                    km.Quit,
 	}
 }
@@ -513,6 +514,91 @@ func TestChangesTelemetry(t *testing.T) {
 	}
 	if fields["rel"] != "src/app.go" {
 		t.Errorf("changes_jump rel = %v, want src/app.go", fields["rel"])
+	}
+}
+
+// TestCopyContentInChanges is the HEADLINE catch (FR7/D6): in modeChanges `Y` copies
+// the change's CURRENT on-disk content, resolving the path via previewBaseDir()=root —
+// NOT selectedAbsPath()/m.cwd. The discriminator is m.cwd != m.root: we descend into
+// src/ BEFORE entering changes, so a wrong m.cwd-based read would target
+// root/src/src/app.go (a non-existent file → "⚠ <err>", no record), while
+// previewBaseDir() reads the real root/src/app.go. The recorded byte count must equal
+// the real on-disk content (NOT the diff text shown in the preview).
+func TestCopyContentInChanges(t *testing.T) {
+	rec := &fieldRecorder{}
+	m := changesRepoModel(t, rec)
+	m.diffOn = true
+	// Descend into src/ so m.cwd != m.root — the discriminator for the D6 catch.
+	moveCursorToAny(t, &m, "src")
+	m = dogPress(t, m, keyRune('l'))
+	if filepath.Base(m.cwd) != "src" {
+		t.Fatalf("setup: cwd should be …/src, got %q", m.cwd)
+	}
+
+	m = dogPress(t, m, keyRune('c'))
+	if m.mode != modeChanges {
+		t.Fatalf("setup: `c` did not enter modeChanges (mode=%v)", m.mode)
+	}
+	moveChangesCursorTo(t, &m, "src/app.go") // root-relative name in the flat list
+	m.pendingWidth = 0
+	m.renderNow()
+	if !m.previewIsDiff {
+		t.Fatalf("setup: src/app.go must preview as a DIFF in changes mode (previewIsDiff=false)")
+	}
+
+	// The real on-disk content lives at <root>/src/app.go (resolved via previewBaseDir).
+	raw, err := os.ReadFile(filepath.Join(m.root, "src", "app.go"))
+	if err != nil {
+		t.Fatalf("read on-disk fixture: %v", err)
+	}
+
+	m = dogPress(t, m, keyRune('Y'))
+	fields, recorded := rec.last("action.copy_content")
+	if !recorded {
+		t.Fatalf("`Y` in modeChanges must copy the change (record action.copy_content); status=%q events=%v", m.statusMsg, rec.names())
+	}
+	if n, _ := fields["bytes"].(int); n != len(raw) {
+		t.Errorf("recorded bytes = %d, want the real on-disk content %d at root/src/app.go (resolve via previewBaseDir, not m.cwd; not the diff text)", n, len(raw))
+	}
+	if fields["name"] != "src/app.go" {
+		t.Errorf("recorded name = %v, want the root-relative src/app.go", fields["name"])
+	}
+	// Still parked in modeChanges (copy is a side-effect, not a teleport).
+	if m.mode != modeChanges {
+		t.Errorf("`Y` in modeChanges must stay in modeChanges; got %v", m.mode)
+	}
+}
+
+// TestCopyContentChangesDeletedFile pins FR7's deleted-file edge: a change whose file
+// was deleted on disk IS listed, but `Y` on it cannot read content — os.ReadFile fails,
+// surfacing "⚠ <err>" via the shared error branch (D6), recording nothing. No panic.
+func TestCopyContentChangesDeletedFile(t *testing.T) {
+	rec := &fieldRecorder{}
+	repo := t.TempDir()
+	gitExec(t, repo, "init")
+	mustWrite(t, repo, "gone.go", "package main\n")
+	gitExec(t, repo, "add", ".")
+	gitExec(t, repo, "commit", "-m", "init")
+	if err := os.Remove(filepath.Join(repo, "gone.go")); err != nil {
+		t.Fatal(err)
+	}
+	m := modelAt(t, repo, 120, 30)
+	m.tel = rec
+	if m.git.repoRoot == "" {
+		m.git.repoRoot = detectRepoRoot(m.root)
+		m.gitRootPrefix = repoRelPrefix(m.git.repoRoot, m.root)
+	}
+	state, _ := collectGitState(m.git.repoRoot, nil)
+	m = dogPressMsg(t, m, gitRefreshedMsg{gen: m.gitGen, state: state})
+	m = dogPress(t, m, keyRune('c'))
+	moveChangesCursorTo(t, &m, "gone.go")
+
+	m = dogPress(t, m, keyRune('Y'))
+	if !strings.HasPrefix(m.statusMsg, "⚠ ") {
+		t.Errorf("`Y` on a deleted change: status = %q, want a '⚠ <err>' refusal", m.statusMsg)
+	}
+	if _, recorded := rec.last("action.copy_content"); recorded {
+		t.Errorf("a failed read must NOT record action.copy_content")
 	}
 }
 

@@ -52,8 +52,9 @@ type KeyMap struct {
 	Back           key.Binding // esc — focusPreview→list / palette close / help close / changes close
 
 	// Misc
-	Yank key.Binding // y — copy the selection's project-relative path (prd-yank-relative-path)
-	Quit key.Binding
+	Yank        key.Binding // y — copy the selection's project-relative path (prd-yank-relative-path)
+	CopyContent key.Binding // Y — copy the previewed file's whole raw text (prd-preview-copy)
+	Quit        key.Binding
 }
 
 // defaultKeyMap returns the ship default. CHANGE A KEY HERE, NOT IN updateNormal.
@@ -97,7 +98,8 @@ func defaultKeyMap() KeyMap {
 		FullHelp:       key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 		Back:           key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 
-		Yank: key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "yank rel path")),
-		Quit: key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
+		Yank:        key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "yank rel path")),
+		CopyContent: key.NewBinding(key.WithKeys("Y"), key.WithHelp("Y", "copy file content")),
+		Quit:        key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
 	}
 }

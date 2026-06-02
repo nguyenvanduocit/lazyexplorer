@@ -78,21 +78,31 @@ func parseArgs(args []string) (cliArgs, error) {
 	return out, nil
 }
 
+// helpText is the CLI `--help` text as a single pure string — the Functional Core so
+// the FR11/FR12 surfaces (the `Y copy file content` Keys line + the Shift/Option
+// native-selection footnote) are assertable without capturing os.Stdout (see
+// TestHelpTextSurfaces). printHelp is the thin Imperative Shell that emits it.
+func helpText() string {
+	return `Usage: lazyexplorer [DIR] [--split[=right|below]]
+  DIR                   directory to explore (defaults to current working directory)
+  --split[=right|below] open a split pane in the current terminal and run there,
+                        leaving this pane untouched (tmux, zellij, WezTerm, Kitty,
+                        Ghostty, iTerm2; default right)
+  --version             print version and exit
+  --help                print this help and exit
+
+Keys: q/ctrl+c quit · j/k or ↑↓ move · l/enter open · h/← up
+      d delete · r rename · e open in editor · y yank rel path · Y copy file content · J/ctrl+d page-down · K/ctrl+u page-up
+      (to select a visible span: hold Shift — Option on iTerm2/macOS Terminal/tmux-macOS — then drag for native selection)
+
+Telemetry (opt-in): LE_TELEMETRY=1 DD_API_KEY=… — see README.md.
+`
+}
+
 // printHelp documents the CLI. buildVersion is the ldflags-stamped release version
 // (see telemetry.go).
 func printHelp() {
-	fmt.Println("Usage: lazyexplorer [DIR] [--split[=right|below]]")
-	fmt.Println("  DIR                   directory to explore (defaults to current working directory)")
-	fmt.Println("  --split[=right|below] open a split pane in the current terminal and run there,")
-	fmt.Println("                        leaving this pane untouched (tmux, zellij, WezTerm, Kitty,")
-	fmt.Println("                        Ghostty, iTerm2; default right)")
-	fmt.Println("  --version             print version and exit")
-	fmt.Println("  --help                print this help and exit")
-	fmt.Println()
-	fmt.Println("Keys: q/ctrl+c quit · j/k or ↑↓ move · l/enter open · h/← up")
-	fmt.Println("      d delete · r rename · e open in editor · y yank rel path · J/ctrl+d page-down · K/ctrl+u page-up")
-	fmt.Println()
-	fmt.Println("Telemetry (opt-in): LE_TELEMETRY=1 DD_API_KEY=… — see README.md.")
+	fmt.Print(helpText())
 }
 
 func main() {

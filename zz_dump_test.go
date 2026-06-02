@@ -199,6 +199,54 @@ func TestDumpOpenInEditorFrames(t *testing.T) {
 	}
 }
 
+// TestDumpCopyContentHelpFrames is the visual-verdict harness for
+// docs/prd-preview-copy.md T8. It writes ANSI frames to $LAZYEXPLORER_DUMP_DIR for
+// freeze → PNG → agent verdict on the `?` full-help overlay:
+//
+//	fullhelp-misc-90x40 — the overlay scrolled so the Misc group (yank rel path ·
+//	                    copy file content · quit) AND the "Selecting text" footnote
+//	                    are in the modal's visible window. The new `Y copy file
+//	                    content` row must align with its siblings, and the footnote
+//	                    must read cleanly: "Y copies the whole file. To select a
+//	                    visible span, hold Shift (Option on iTerm2/macOS …) then drag".
+//
+// Run with:
+//
+//	LAZYEXPLORER_DUMP_DIR=/tmp/le-copy go test -run TestDumpCopyContentHelpFrames .
+func TestDumpCopyContentHelpFrames(t *testing.T) {
+	outDir := os.Getenv("LAZYEXPLORER_DUMP_DIR")
+	if outDir == "" {
+		t.Skip("set LAZYEXPLORER_DUMP_DIR to dump View() frames for visual verdict")
+	}
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	for _, name := range []string{"main.go", "model.go", "README.md"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("package main\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// A tall overlay scrolled to the tail so the Misc group + the native-selection
+	// footnote both sit in the modal window. Scroll target computed from fullHelp() +
+	// helpNoteLines so it stays correct if a group gains/loses a binding: put the
+	// Misc-group title at the top of the visible window.
+	mHelp := modelAt(t, dir, 90, 40)
+	mHelp.renderStyle = "dark"
+	mHelp.enterHelp()
+	groups := mHelp.fullHelp()
+	miscTop := 0
+	for gi := 0; gi < len(groups)-1; gi++ { // every group before Misc (the last)
+		miscTop += 1 + len(groups[gi]) + 1
+	}
+	mHelp.helpTop = miscTop
+	if err := os.WriteFile(filepath.Join(outDir, "fullhelp-misc-90x40.ansi"), []byte(mHelp.View().Content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestDumpMiddleDividerFrames is the visual-verdict harness for
 // docs/prd-middle-divider.md §6 checklist 17. It writes two ANSI frames to
 // $LAZYEXPLORER_DUMP_DIR so an external tool (freeze / vhs) can render them

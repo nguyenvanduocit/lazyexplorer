@@ -579,6 +579,42 @@ func TestUpdateSearchBackspaceEmptyExits(t *testing.T) {
 	}
 }
 
+// TestCopyContentNotWiredInSearch pins FR8/D4: in modeSearch `Y` is a QUERY
+// character — it appends to searchQuery and re-filters — it must NEVER copy. The
+// updateSearch switch is closed (no fall-through to updateNormal), so a `Y` keypress
+// lands in the printable-default branch. Driven through the live Update edge so the
+// `Y` takes the exact path a real keypress takes. The recorder proves no copy fired.
+func TestCopyContentNotWiredInSearch(t *testing.T) {
+	rec := &fieldRecorder{}
+	root := t.TempDir()
+	mustWrite(t, root, "Yacht.go", "package main\n") // a file whose name contains a 'Y'
+	mustWrite(t, root, "main.go", "package main\n")
+	m := modelAt(t, root, 100, 30)
+	m.tel = rec
+	walked, err := walkTree(root)
+	if err != nil {
+		t.Fatalf("warm-cache walk: %v", err)
+	}
+	m.searchAll = walked
+	m.searchAllAt = time.Now()
+	m.enterSearch()
+
+	var tm tea.Model = m
+	tm, _ = tm.Update(tea.KeyPressMsg{Code: 'Y', Text: "Y"})
+	m = tm.(model)
+
+	if m.searchQuery != "Y" {
+		t.Errorf("typing `Y` in search: searchQuery = %q, want \"Y\" (it is a query character, not a copy)", m.searchQuery)
+	}
+	// Re-filtered: only the Y-bearing file survives an exact-cased 'Y' subsequence.
+	if !contains(walkNames(m.entries), "Yacht.go") {
+		t.Errorf("typing `Y` should re-filter to Yacht.go; got %v", walkNames(m.entries))
+	}
+	if _, recorded := rec.last("action.copy_content"); recorded {
+		t.Errorf("`Y` in search must NOT copy (it is a query character); a copy was recorded")
+	}
+}
+
 // TestUpdateSearchNavigation: up/down move the cursor within the result list.
 func TestUpdateSearchNavigation(t *testing.T) {
 	m := searchModel(t)

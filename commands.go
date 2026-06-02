@@ -96,6 +96,19 @@ func defaultCommands() []Command {
 			},
 		},
 		{
+			Name: "copy file content", Description: "copy the previewed file's whole raw text",
+			// Discoverability twin of the `Y` key (prd-preview-copy D9): BOTH route through
+			// copyContent, the single code path that guards, reads the whole file from disk,
+			// copies the raw text, and records action.copy_content exactly once — a split
+			// twin would double-record. copyContent itself guards the empty listing / dir /
+			// binary cases, so no pre-guard is needed here (unlike open-in-editor, whose
+			// editorCommand has no such guard).
+			Run: func(m *model, _ string) tea.Cmd {
+				m.copyContent()
+				return nil
+			},
+		},
+		{
 			Name: "open in editor", Description: "open the selected file in $EDITOR",
 			Run: func(m *model, _ string) tea.Cmd {
 				// Discoverability twin of the `e` key — same guard, since the palette is

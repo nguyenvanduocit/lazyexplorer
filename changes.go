@@ -254,6 +254,15 @@ func (m model) updateChanges(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, km.OpenEntry): // enter / l / right
 		m.openChangesResult()
 		return m, nil
+	// Y copies the row's CURRENT on-disk content (prd-preview-copy D4/FR7) — the
+	// headline context: a file the agent just changed (exactly what this view lists).
+	// copyContent resolves via previewBaseDir()=root (the row name is root-relative), so
+	// it copies the real file, not the diff text shown in the preview. This switch is
+	// closed (no fall-through to updateNormal), so without this case Y would be a dead
+	// key here. Shared code path → telemetry records once.
+	case key.Matches(msg, km.CopyContent):
+		m.copyContent()
+		return m, nil
 	case key.Matches(msg, km.MoveDown): // down / j
 		if m.cursor < len(m.entries)-1 {
 			m.cursor++
