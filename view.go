@@ -602,6 +602,17 @@ func (m model) previewScroll() (top, bodyH int) {
 	return top, bodyH
 }
 
+// selectedSrcLine reports whether source line s falls inside the active selection's
+// inclusive [min,max] range (prd-preview-selection D12). False when not selecting, so
+// the render paths can branch on it unconditionally.
+func (m model) selectedSrcLine(s int) bool {
+	if !m.selecting {
+		return false
+	}
+	lo, hi := min(m.selAnchor, m.selCursor), max(m.selAnchor, m.selCursor)
+	return s >= lo && s <= hi
+}
+
 // renderPreview draws the right panel: a folder listing (G002) or a file's
 // content. The folder branch renders one row per entry through renderEntryRow
 // at width w with active=false — the SAME routine the list pane uses (FR1),
@@ -646,10 +657,20 @@ func (m model) renderPreview(w int) string {
 
 	// Scrollable preview (plain text or code).
 	if m.previewWrap {
-		// Wrapped: previewDisplay holds the hard-wrapped visual lines, each ≤ w.
+		// Wrapped: previewDisplay holds the hard-wrapped visual lines, each ≤ w. Each
+		// visual line maps to its source line via sourceLineAt; a selected source line's
+		// visual rows render de-colored + selectionStyle so the highlight block equals
+		// exactly what copySelection copies (WYSIWYG, D12).
 		var lines []string
 		for i := top; i < len(m.previewDisplay) && i < top+bodyH; i++ {
 			line := m.previewDisplay[i]
+			if m.selectedSrcLine(m.sourceLineAt(i)) {
+				// .Width(w) pads the highlight to the full pane width (like cursorActiveStyle's
+				// full-row bar, view.go renderEntryRow) so the selected block is a clean rect,
+				// not a ragged bar only as wide as the text (D12 WYSIWYG).
+				lines = append(lines, selectionStyle.Width(w).Render(fitWidth(ansi.Strip(line), w)))
+				continue
+			}
 			if !hasANSI(line) { // plain wrapped line → rune-fit; code carries ANSI → verbatim
 				line = fitWidth(line, w)
 			}
@@ -658,17 +679,21 @@ func (m model) renderPreview(w int) string {
 		return strings.Join(lines, "\n")
 	}
 
-	// Nowrap: a horizontal window over the logical lines + ‹/› edge indicators.
+	// Nowrap: a horizontal window over the logical lines + ‹/› edge indicators. top is
+	// threaded so renderHWindow can map each visible row back to its source line for the
+	// selection highlight (in nowrap, source line = top + row).
 	end := min(top+bodyH, len(m.preview))
-	return m.renderHWindow(m.preview[top:end], w)
+	return m.renderHWindow(m.preview[top:end], top, w)
 }
 
 // renderHWindow renders nowrap scrollable lines: each is sliced to the window
 // [previewHScroll, previewHScroll+contentW) with ‹/› edge indicators. The
 // indicator columns are reserved by a GLOBAL condition (does any visible line
 // overflow that side?) so content width is uniform across lines and code stays
-// column-aligned instead of jittering line to line (D9).
-func (m model) renderHWindow(visible []string, w int) string {
+// column-aligned instead of jittering line to line (D9). top is the absolute index
+// of visible[0] (in nowrap, source line = top + i), so a selected line can be drawn
+// de-colored + selectionStyle at full width (prd-preview-selection D12).
+func (m model) renderHWindow(visible []string, top, w int) string {
 	left := m.previewHScroll
 	showLeft := left > 0
 
@@ -696,7 +721,17 @@ func (m model) renderHWindow(visible []string, w int) string {
 	}
 
 	var out []string
-	for _, line := range visible {
+	for i, line := range visible {
+		// A selected line ignores the hSlice window + ‹/› indicators (§5.5 documented
+		// trade-off: reading the whole selected line matters more than panning while
+		// selecting) and renders de-colored + selectionStyle at the full pane width, so
+		// the highlight block equals what copySelection copies.
+		if m.selectedSrcLine(top + i) {
+			// .Width(w) pads the highlight to the full pane width so the selected block
+			// is a clean rect (matches cursorActiveStyle's full-row bar), not ragged.
+			out = append(out, selectionStyle.Width(w).Render(fitWidth(ansi.Strip(line), w)))
+			continue
+		}
 		var b strings.Builder
 		if showLeft {
 			b.WriteString(dimStyle.Render("‹"))
@@ -874,6 +909,13 @@ func (m model) renderStatus() string {
 		return statusBarStyle.Width(m.width).Render(fitWidth(
 			"[j/k] scroll   [esc] close", m.width-2))
 	default:
+		// While a line selection is active, the footer carries the selection's own
+		// hint (copy / cancel) instead of the focus hints — the only keys that matter
+		// mid-selection (prd-preview-selection FR10).
+		if m.selecting {
+			hint := "y copy · esc cancel"
+			return statusBarStyle.Width(m.width).Render(fitWidth(hint, m.width-2))
+		}
 		// Focus is signalled by the divider glow (renderList/View draw it toward
 		// m.focusPane) plus the dimmed cursor row — not by a status-bar chip — so
 		// the footer is just the focus-relevant hints, sourced from the keymap so
@@ -1083,6 +1125,8 @@ func (m model) shortHelp() []key.Binding {
 		} else {
 			base = append(base, km.PreviewScrollRight, km.PreviewHScrollHalfRight, km.PreviewHScrollReset, km.PreviewToggleWrap)
 		}
+		// Line-selection is available on a scrollable preview (plain/code/diff) only.
+		base = append(base, km.SelectMode)
 	}
 	return append(base, km.Back, km.CommandPalette, km.FullHelp, km.Quit)
 }
@@ -1093,7 +1137,7 @@ func (m model) fullHelp() [][]key.Binding {
 	km := m.keymap
 	return [][]key.Binding{
 		{km.MoveUp, km.MoveDown, km.GoTop, km.GoBottom, km.OpenEntry, km.GoUp},
-		{km.PreviewScrollUp, km.PreviewScrollDown, km.PreviewHalfPageUp, km.PreviewHalfPageDown, km.PreviewJumpTop, km.PreviewJumpBottom, km.PreviewScrollLeft, km.PreviewScrollRight, km.PreviewHScrollHalfLeft, km.PreviewHScrollHalfRight, km.PreviewHScrollReset, km.PreviewToggleWrap, km.ToggleDiff},
+		{km.PreviewScrollUp, km.PreviewScrollDown, km.PreviewHalfPageUp, km.PreviewHalfPageDown, km.PreviewJumpTop, km.PreviewJumpBottom, km.PreviewScrollLeft, km.PreviewScrollRight, km.PreviewHScrollHalfLeft, km.PreviewHScrollHalfRight, km.PreviewHScrollReset, km.PreviewToggleWrap, km.ToggleDiff, km.SelectMode},
 		{km.Rename, km.Delete, km.OpenInEditor},
 		{km.FocusToggle, km.Search, km.Changes, km.CommandPalette, km.FullHelp, km.Back},
 		{km.Yank, km.CopyContent, km.Quit},

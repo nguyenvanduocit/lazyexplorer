@@ -41,6 +41,7 @@ func allKeyBindings(km KeyMap) map[string]key.Binding {
 		"PreviewHScrollReset":     km.PreviewHScrollReset,
 		"PreviewToggleWrap":       km.PreviewToggleWrap,
 		"ToggleDiff":              km.ToggleDiff,
+		"SelectMode":              km.SelectMode,
 		"Rename":                  km.Rename,
 		"Delete":                  km.Delete,
 		"OpenInEditor":            km.OpenInEditor,
@@ -52,6 +53,7 @@ func allKeyBindings(km KeyMap) map[string]key.Binding {
 		"Back":                    km.Back,
 		"Yank":                    km.Yank,
 		"CopyContent":             km.CopyContent,
+		"CopySelection":           km.CopySelection,
 		"Quit":                    km.Quit,
 	}
 }

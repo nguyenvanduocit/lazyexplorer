@@ -75,6 +75,15 @@ var (
 	fileStyle = lipgloss.NewStyle().Foreground(colFg)
 	dimStyle  = lipgloss.NewStyle().Foreground(colDim)
 
+	// selectionStyle backs the de-colored lines of an in-app preview line selection
+	// (prd-preview-selection D12). A muted elevated SURFACE (slate), deliberately NOT
+	// colAccent — the list cursor owns the accent (cursorActiveStyle), so a distinct
+	// background keeps "selected span in the preview" visually apart from "cursor row in
+	// the list". Foreground stays colFg so the de-colored text reads on the surface.
+	selectionStyle = lipgloss.NewStyle().
+			Background(lipgloss.Color("#313244")).
+			Foreground(colFg)
+
 	// renderingStyle tints the transient render spinner at the right edge of the
 	// status bar while an async preview (markdown/code/image) is in flight. The
 	// single accent draws the eye without adding a new color.

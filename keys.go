@@ -36,7 +36,8 @@ type KeyMap struct {
 	PreviewHScrollHalfRight,
 	PreviewHScrollReset,
 	PreviewToggleWrap,
-	ToggleDiff key.Binding // v — diff ↔ full content for a modified file (prd-preview-diff-view)
+	ToggleDiff,
+	SelectMode key.Binding // V — start an in-app line selection in the preview (prd-preview-selection)
 
 	// Mutation (normal mode + focusList)
 	Rename,
@@ -54,7 +55,13 @@ type KeyMap struct {
 	// Misc
 	Yank        key.Binding // y — copy the selection's project-relative path (prd-yank-relative-path)
 	CopyContent key.Binding // Y — copy the previewed file's whole raw text (prd-preview-copy)
-	Quit        key.Binding
+	// CopySelection — y/enter copy the active line selection (prd-preview-selection D7).
+	// It SHARES "y" with Yank and "enter" with OpenEntry on purpose: the dispatch lane
+	// (updateSelecting, gated on m.selecting) disambiguates — CopySelection only fires
+	// while selecting, Yank/OpenEntry only when !selecting. So this is NOT free, and
+	// the collision is intentional, not a double-map bug.
+	CopySelection key.Binding
+	Quit          key.Binding
 }
 
 // defaultKeyMap returns the ship default. CHANGE A KEY HERE, NOT IN updateNormal.
@@ -86,6 +93,7 @@ func defaultKeyMap() KeyMap {
 		PreviewHScrollReset:     key.NewBinding(key.WithKeys("0"), key.WithHelp("0", "scroll reset")),
 		PreviewToggleWrap:       key.NewBinding(key.WithKeys("w"), key.WithHelp("w", "toggle wrap")),
 		ToggleDiff:              key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "toggle diff")),
+		SelectMode:              key.NewBinding(key.WithKeys("V"), key.WithHelp("V", "select lines")),
 
 		Rename:       key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "rename")),
 		Delete:       key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete")),
@@ -100,6 +108,9 @@ func defaultKeyMap() KeyMap {
 
 		Yank:        key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "yank rel path")),
 		CopyContent: key.NewBinding(key.WithKeys("Y"), key.WithHelp("Y", "copy file content")),
-		Quit:        key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
+		// y/enter copy the active line selection. Shares keys with Yank/OpenEntry by
+		// design (D7); the selecting sub-state lane keeps them from colliding at runtime.
+		CopySelection: key.NewBinding(key.WithKeys("y", "enter"), key.WithHelp("y/enter", "copy selection")),
+		Quit:          key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
 	}
 }

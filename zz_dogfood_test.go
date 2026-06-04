@@ -29,6 +29,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -71,6 +72,121 @@ func TestDogfoodBesideAgent(t *testing.T) {
 	t.Run("T6_open_in_editor_or_reveal", t6OpenInEditorOrReveal)
 	t.Run("T7_peek_then_back", t7PeekThenBack)
 	t.Run("T8_copy_content", t8CopyContent)
+	t.Run("T9_select_and_copy_range", t9SelectAndCopyRange)
+	t.Run("T10_drag_select_range", t10DragSelectRange)
+}
+
+// dogSelectionModel builds a sized model with a multi-line text file selected and
+// rendered, the preview focused — the situation a user is in when they want to grab
+// a span of an agent-edited file. Returns the model and the file's de-ANSI lines.
+func dogSelectionModel(t *testing.T) (model, []string, *fieldRecorder) {
+	t.Helper()
+	rec := &fieldRecorder{}
+	root := t.TempDir()
+	lines := make([]string, 30)
+	for i := range lines {
+		lines[i] = "content line " + strconv.Itoa(i)
+	}
+	body := strings.Join(lines, "\n") + "\n"
+	mustWrite(t, root, "edit.txt", body)
+	m := modelAt(t, root, 100, 24)
+	m.tel = rec
+	moveCursorToAny(t, &m, "edit.txt")
+	m.pendingWidth = 0
+	m.renderNow() // settle the plain-text preview before any selection starts
+	return m, plainLines([]byte(body)), rec
+}
+
+// ----------------------------------------------------------------------------
+// T9 — select-and-copy-range (keyboard): the agent edited a long file; the user
+// wants a SPAN of it (not the whole file, not a visible-only native drag) pasted
+// into chat. `V` from the preview, `j` to extend, `y` to copy — driven through
+// Update, the same edge a keypress takes. The recorder is the content oracle.
+// ----------------------------------------------------------------------------
+func t9SelectAndCopyRange(t *testing.T) {
+	m, want, rec := dogSelectionModel(t)
+
+	keys := 0
+	// Focus the preview (Tab), then V to start, j×2 to extend, y to copy.
+	m = dogPress(t, m, keyTab())
+	keys++
+	if m.focusPane != focusPreview {
+		t.Fatalf("[T9] Tab did not focus the preview")
+	}
+	m = dogPress(t, m, keyRune('V'))
+	keys++
+	if !m.selecting {
+		t.Fatalf("[T9] `V` did not start a selection (focus=%v scrollable=%v)", m.focusPane, m.previewScrollable)
+	}
+	lo := m.selAnchor
+	m = dogPress(t, m, keyRune('j'))
+	keys++
+	m = dogPress(t, m, keyRune('j'))
+	keys++
+	hi := m.selCursor
+	m = dogPress(t, m, keyRune('y'))
+	keys++
+
+	fields, recorded := rec.last("action.copy_selection")
+	if !recorded {
+		t.Fatalf("[T9] `V`+extend+`y` produced no action.copy_selection; status=%q events=%v", m.statusMsg, rec.names())
+	}
+	gotLines, _ := fields["lines"].(int)
+	gotBytes, _ := fields["bytes"].(int)
+	wantRange := make([]string, 0, hi-lo+1)
+	for i := lo; i <= hi; i++ {
+		wantRange = append(wantRange, ansi.Strip(want[i]))
+	}
+	wantText := strings.Join(wantRange, "\n")
+	capability := gotLines == hi-lo+1 && gotBytes == len(wantText)
+	if !capability {
+		t.Errorf("[T9] copied lines=%d bytes=%d, want lines=%d bytes=%d (the de-ANSI span)", gotLines, gotBytes, hi-lo+1, len(wantText))
+	}
+	if m.selecting {
+		t.Errorf("[T9] copy must end the selection sub-state")
+	}
+	t.Logf("[T9 select-copy-range] achievable=%v keystrokes=%d (Tab→V→j→j→y), copied lines=%d bytes=%d", capability, keys, gotLines, gotBytes)
+	t.Logf("[T9] resolved: in-app line selection copies a RANGE (incl. off-viewport) of raw de-colored text — the gap native-drag can't reach (off-viewport, 2-col, raw)")
+}
+
+// ----------------------------------------------------------------------------
+// T10 — drag-select (mouse): the mouse crowd drags across a span in the preview
+// and releases to copy — one gesture. Press → motion → release through Update.
+// ----------------------------------------------------------------------------
+func t10DragSelectRange(t *testing.T) {
+	m, _, rec := dogSelectionModel(t)
+	g := m.layout()
+	x := g.dividerStart + dividerWidth + 1 // a column inside the preview (right) pane
+	y0 := g.previewFirstRow
+	y4 := g.previewFirstRow + 4
+
+	var tm tea.Model = m
+	tm, _ = tm.Update(tea.MouseClickMsg{X: x, Y: y0, Button: tea.MouseLeft})
+	m = tm.(model)
+	if m.selecting {
+		t.Fatalf("[T10] press alone committed a selection — only a drag should (FR14)")
+	}
+	tm, _ = tm.Update(tea.MouseMotionMsg{X: x, Y: y4, Button: tea.MouseLeft})
+	m = tm.(model)
+	if !m.selecting {
+		t.Fatalf("[T10] motion after press did not commit the selection")
+	}
+	tm, _ = tm.Update(tea.MouseReleaseMsg{X: x, Y: y4, Button: tea.MouseLeft})
+	m = tm.(model)
+
+	fields, recorded := rec.last("action.copy_selection")
+	if !recorded {
+		t.Fatalf("[T10] drag+release produced no action.copy_selection; status=%q events=%v", m.statusMsg, rec.names())
+	}
+	gotLines, _ := fields["lines"].(int)
+	capability := gotLines == 5 // rows 0..4 inclusive
+	if !capability {
+		t.Errorf("[T10] dragged 5 rows → copied lines=%d, want 5", gotLines)
+	}
+	if m.selecting {
+		t.Errorf("[T10] release must end the selection sub-state")
+	}
+	t.Logf("[T10 drag-select] achievable=%v copied lines=%d (press→drag 4 rows→release-copy, one gesture)", capability, gotLines)
 }
 
 // ----------------------------------------------------------------------------

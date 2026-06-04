@@ -9,6 +9,7 @@ import (
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // pollInterval is how often the poll loop re-checks cwd for external changes
@@ -250,6 +251,19 @@ type model struct {
 	// escape). Instead we resolve the jail root ONCE here and key entries off
 	// rel(m.root, …), which stays in the app's space — see indicatorFor.
 	gitRootPrefix string
+
+	// In-app line selection (prd-preview-selection). A SUB-STATE of focusPreview, not a
+	// mode: gated by `selecting` inside updateNormal so the mode machinery is untouched.
+	// selAnchor/selCursor are SOURCE-line indices into m.preview (the displayed buffer);
+	// the inclusive range [min,max] is what highlights and what copySelection copies.
+	// Alive only while selecting — there is no persistent preview cursor (D6).
+	// mouseDragArmed: a left-press in a scrollable file preview armed a drag; the first
+	// MOTION commits it to selecting=true (a plain click must not copy, FR14). It reuses
+	// the same selAnchor/selCursor/copySelection/highlight as the keyboard lane.
+	selecting      bool
+	selAnchor      int
+	selCursor      int
+	mouseDragArmed bool
 
 	mode      mode
 	focusPane focusPane // sub-state of modeNormal; orthogonal to mode prompts (D1)
@@ -648,6 +662,11 @@ func (m *model) refreshPreview() {
 	// diff state-select branch below turns it on, so a stale "true" never mis-routes
 	// syncPreview into dispatching diffHunks for a clean/non-diff selection.
 	m.previewIsDiff = false
+	// Selection reset hygiene (prd-preview-selection FR8): the buffer is changing, so a
+	// live selection's source-line indices are about to go stale. Clearing here covers
+	// the cursor-move path (applyPreview covers async render-land / resize / git refresh).
+	m.selecting = false
+	m.mouseDragArmed = false
 
 	if len(m.entries) == 0 {
 		// Mirror renderList's mode gate (view.go): in the changed-only view an empty
@@ -1018,6 +1037,16 @@ func (m *model) applyPreview(msg previewRenderedMsg) {
 		renderer = r.name
 	}
 
+	// CRITICAL: a landing render REASSIGNS m.preview, so any active selection's
+	// selAnchor/selCursor now index a different (possibly shorter) buffer — a stale
+	// range that copySelection would silently copy WRONG (worst case a diff: whole-file
+	// placeholder → a few hunk lines). Cancel here, the single choke point that covers
+	// every reassign path: async render-land, resize re-render, and modeChanges git
+	// refresh all flow through applyPreview (D11/FR7). Set it before EITHER branch
+	// reassigns m.preview so both the error fallback and the success path are covered.
+	m.selecting = false
+	m.mouseDragArmed = false
+
 	if msg.err != nil {
 		// plainLines on srcRaw is safe for text renderers (srcRaw is normalized
 		// text) and for image (which never errors → never reaches here). A future
@@ -1071,7 +1100,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// while the user is mid-prompt or dragging the divider so we never yank
 		// the selection or churn the layout out from under them. Always reschedule
 		// so the loop keeps running regardless.
-		if m.mode == modeNormal && !m.dragging {
+		if m.mode == modeNormal && !m.dragging && !m.selecting {
 			m.syncFromDisk()
 		}
 		cmd = tickCmd()
@@ -1273,11 +1302,36 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.setLeftFromX(e.X)
 			}
+			return m, nil
+		}
+		// Drag-to-select motion (prd-preview-selection D13): the first motion after an
+		// armed press COMMITS to selecting and moves the cursor to the source line under
+		// the pointer. A motion past the top/bottom pane edge edge-scrolls one line
+		// (best-effort, FR15) so a drag can select past the viewport with no keyboard.
+		if m.mouseDragArmed {
+			_, bodyH := m.previewScroll()
+			if e.Y < g.previewFirstRow {
+				m.scrollPreview(-previewLineStep)
+			} else if e.Y >= g.previewFirstRow+bodyH {
+				m.scrollPreview(previewLineStep)
+			}
+			m.selecting = true
+			m.selCursor = m.srcLineAtRow(e.Y, g)
 		}
 		return m, nil
 
 	case tea.MouseReleaseMsg:
 		m.dragging = false
+		// Drag-to-select release (prd-preview-selection D13): if a motion committed the
+		// selection, RELEASE copies it — release-is-copy, one gesture for the mouse crowd
+		// (FR13). A press+release with no motion left selecting=false, so it copies
+		// nothing (FR14). Always disarm.
+		if m.mouseDragArmed {
+			if m.selecting {
+				m.copySelection()
+			}
+			m.mouseDragArmed = false
+		}
 		// Reflow to the divider's new dimensions happens in Update's tail
 		// syncPreview now that dragging is false (deferred during motion).
 		return m, nil
@@ -1373,6 +1427,18 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			m.focusPane = focusPreview
 		}
 		if !overList {
+			// A left-press inside a SCROLLABLE FILE preview ARMS a drag-to-select
+			// (prd-preview-selection D13): anchor the source line under the cursor but
+			// DON'T commit to selecting yet — a plain click (press+release, no motion)
+			// must not copy (FR14). The first motion commits it. A folder preview is not
+			// scrollable, so it falls through to previewClick (open the clicked row).
+			if m.previewScrollable && !m.previewIsDir {
+				m.mouseDragArmed = true
+				m.selecting = false
+				m.selAnchor = m.srcLineAtRow(e.Y, g)
+				m.selCursor = m.selAnchor
+				return m, nil
+			}
 			m.previewClick(e.Y, g) // click a name in a folder listing → open + select it
 			return m, nil
 		}
@@ -1447,6 +1513,21 @@ func (m *model) scrollPreview(delta int) {
 	_, bodyH := m.previewScroll()
 	maxTop := max(0, m.previewLen()-bodyH)
 	m.previewTop = min(max(0, m.previewTop+delta), maxTop)
+}
+
+// srcLineAtRow maps a screen row y to the SOURCE-line index under it in the preview
+// pane (prd-preview-selection §5.6): visual line = previewTop + (y - previewFirstRow),
+// clamped into the visible body, then mapped to its source line via sourceLineAt and
+// clamped to the buffer. Shares previewClick's row origin (previewFirstRow) but, unlike
+// previewClick, CLAMPS out-of-bounds rows rather than rejecting them — a drag past the
+// pane edge must pin to the boundary line so edge-scroll can extend from it (FR15),
+// where a click outside the pane is simply ignored.
+func (m model) srcLineAtRow(y int, g geometry) int {
+	top, bodyH := m.previewScroll()
+	off := min(max(0, y-g.previewFirstRow), max(0, bodyH-1))
+	vrow := top + off
+	src := m.sourceLineAt(vrow)
+	return min(max(0, src), max(0, len(m.preview)-1))
 }
 
 // previewClick handles a left-click inside the right panel. When that panel is
@@ -1570,8 +1651,133 @@ func (m *model) copyContent() {
 	m.statusMsg = "copied " + sel.name + " (" + strconv.Itoa(len(content)) + " bytes)"
 }
 
+// startSelection opens an in-app line selection (prd-preview-selection D1/D6),
+// anchored at the top visible SOURCE line. It REFUSES (no-op + status hint) when a
+// render is in flight (m.pendingWidth > 0): anchoring on a placeholder buffer that
+// is about to be replaced would leave selAnchor/selCursor indexing the wrong lines
+// (the CRITICAL race's belt-and-suspenders, FR8/D11). The caller has already
+// established focusPreview on a scrollable file, so no other guard is needed here.
+func (m *model) startSelection() {
+	if m.pendingWidth > 0 {
+		m.statusMsg = "⚠ preview still rendering — try again"
+		return
+	}
+	m.selecting = true
+	m.selAnchor = m.sourceLineAt(m.previewTop)
+	m.selCursor = m.selAnchor
+}
+
+// moveSelection nudges the selection cursor by delta source lines, clamped to the
+// buffer, then scrolls the cursor's visual line back into the viewport (FR2).
+func (m *model) moveSelection(delta int) {
+	m.moveSelectionTo(m.selCursor + delta)
+}
+
+// moveSelectionTo sets the selection cursor to source line i (clamped) and follows
+// it with the viewport. The anchor stays put — the inclusive [min,max] range is what
+// highlights and copies.
+func (m *model) moveSelectionTo(i int) {
+	if len(m.preview) == 0 {
+		return
+	}
+	m.selCursor = min(max(0, i), len(m.preview)-1)
+	m.scrollSelectionIntoView()
+}
+
+// scrollSelectionIntoView nudges previewTop the minimum needed so the selCursor's
+// VISUAL line sits inside [previewTop, previewTop+bodyH) (§5.5). In wrap mode a
+// source line maps to its first visual line via visualLineFor; in nowrap the visual
+// line equals the source line. The final clamp mirrors scrollPreview's range.
+func (m *model) scrollSelectionIntoView() {
+	_, bodyH := m.previewScroll()
+	vis := m.visualLineFor(m.selCursor)
+	if vis < m.previewTop {
+		m.previewTop = vis
+	} else if vis >= m.previewTop+bodyH {
+		m.previewTop = vis - bodyH + 1
+	}
+	m.previewTop = min(max(0, m.previewTop), max(0, m.previewLen()-bodyH))
+}
+
+// cancelSelection leaves the selecting sub-state without copying, keeping previewTop
+// where it is. Called from Esc / V / Tab (and, defensively, the choke-point cancels).
+func (m *model) cancelSelection() {
+	m.selecting = false
+	m.mouseDragArmed = false
+}
+
+// copySelection copies the de-colored raw text of the selected source lines to the
+// clipboard (D5/D9). It reads m.preview directly — NOT the disk — so the copy
+// reproduces exactly what is displayed at those lines, uniformly for plain/code/diff
+// (ansi.Strip is a no-op on plain, returns source on code, returns text on diff).
+// Telemetry records {lines,bytes} exactly once, never the content (D10). Clears the
+// selecting sub-state. writeClipboard is synchronous (like yank/copyContent).
+func (m *model) copySelection() {
+	lo, hi := min(m.selAnchor, m.selCursor), max(m.selAnchor, m.selCursor)
+	hi = min(hi, len(m.preview)-1)
+	if lo < 0 || lo > hi { // defensive: buffer shrank under us
+		m.selecting = false
+		return
+	}
+	raw := make([]string, 0, hi-lo+1)
+	for i := lo; i <= hi; i++ {
+		raw = append(raw, ansi.Strip(m.preview[i]))
+	}
+	text := strings.Join(raw, "\n")
+	m.tel.Record("action.copy_selection", map[string]any{"lines": hi - lo + 1, "bytes": len(text)})
+	m.selecting = false
+	m.mouseDragArmed = false
+	if err := writeClipboard(text); err != nil {
+		m.statusMsg = "⚠ clipboard: " + err.Error()
+		return
+	}
+	m.statusMsg = "copied " + strconv.Itoa(hi-lo+1) + " lines (" + strconv.Itoa(len(text)) + " bytes)"
+}
+
+// updateSelecting dispatches keypresses while the selecting sub-state is active
+// (prd-preview-selection §5.3). It is a CLOSED switch: only the selection keys act
+// (cancel / copy / move), and EVERY other key — Y/e/r/d, l/right (OpenEntry), v, w,
+// H/L/0 — falls through to a no-op, so no accidental mutation or pane-action lands
+// mid-selection. Copy is bound to CopySelection (y/enter) ONLY — NOT OpenEntry — so
+// l/right never copy-and-exit (D7/FR12). Tab is an explicit cancel+refocus case (so
+// it is not a dead key mid-selection). The bare cmd lets Update's tail reconcile.
+func (m model) updateSelecting(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	km := m.keymap
+	switch {
+	case key.Matches(msg, km.SelectMode), key.Matches(msg, km.Back): // V / esc → cancel
+		m.cancelSelection()
+	case key.Matches(msg, km.FocusToggle): // Tab → cancel then switch focus
+		m.cancelSelection()
+		m.focusPane = focusList
+	case key.Matches(msg, km.CopySelection): // y / enter — NOT OpenEntry (l/right)
+		m.copySelection()
+	case key.Matches(msg, km.MoveDown):
+		m.moveSelection(1)
+	case key.Matches(msg, km.MoveUp):
+		m.moveSelection(-1)
+	case key.Matches(msg, km.PreviewHalfPageDown):
+		_, h := m.previewScroll()
+		m.moveSelection(max(1, h/2))
+	case key.Matches(msg, km.PreviewHalfPageUp):
+		_, h := m.previewScroll()
+		m.moveSelection(-max(1, h/2))
+	case key.Matches(msg, km.GoBottom):
+		m.moveSelectionTo(len(m.preview) - 1)
+	case key.Matches(msg, km.GoTop):
+		m.moveSelectionTo(0)
+	}
+	return m, nil
+}
+
 func (m model) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	km := m.keymap
+
+	// Selection is a sub-state of focusPreview (D1): while it is active, the closed
+	// updateSelecting switch owns every key — the normal-mode switch below never sees
+	// them, so no mutation/navigation key fires mid-selection.
+	if m.selecting {
+		return m.updateSelecting(msg)
+	}
 
 	switch {
 	case key.Matches(msg, km.Quit):
@@ -1588,6 +1794,7 @@ func (m model) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// Tab toggles which pane the navigation keys act on (prd-pane-focus D3).
 	// Two panes → forward == backward, so one key is enough; no shift+tab.
 	case key.Matches(msg, km.FocusToggle):
+		m.cancelSelection() // reset hygiene: a focus flip ends any selection sub-state
 		if m.focusPane == focusList {
 			m.focusPane = focusPreview
 		} else {
@@ -1690,6 +1897,17 @@ func (m model) updateNormal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.diffOn = !m.diffOn
 		m.tel.Record("action.preview_diff_toggle", map[string]any{"diff": m.diffOn})
 		m.refreshPreview()
+
+	// V starts an in-app line selection in the preview (prd-preview-selection D1/D7).
+	// focusPreview + scrollable only (plain/code/diff): markdown/image/folder have no
+	// clean source-line mapping (D4), and the rel/list-acting keys are meaningless to a
+	// selection. startSelection itself refuses while a render is in flight (FR8). Once
+	// selecting, the closed updateSelecting branch at the top of updateNormal owns every
+	// key, so `V` here only ever OPENS a selection (the V-to-cancel path lives there).
+	case key.Matches(msg, km.SelectMode):
+		if m.focusPane == focusPreview && m.previewScrollable && !m.previewIsDir {
+			m.startSelection()
+		}
 
 	case key.Matches(msg, km.Rename):
 		if m.focusPane == focusList && len(m.entries) > 0 && m.entries[m.cursor].name != ".." {

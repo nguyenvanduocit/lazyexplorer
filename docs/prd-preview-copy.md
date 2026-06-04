@@ -2,6 +2,12 @@
 
 Status: **accepted** · Author: preview-copy-spec workflow · Ngày: 2026-06-02 · Shipped: 2026-06-02 (✅ `go build -o lazyexplorer . && go vet ./... && go test ./...` + `go test -race ./...` green)
 
+> **D1/D2 narrowed by `prd-preview-selection`** (2026-06-04): in-app line selection (`V` + mouse drag)
+> now exists for a line RANGE — including spans scrolled off-viewport and the 2-col preview column that
+> native-drag can't isolate. `Y` (whole file) and native Shift/Option-drag (full-width / single-column
+> visible spans) remain exactly as specified here; `V` covers the part native-drag never reached. See
+> `prd-preview-selection` §2 for the three-tool split.
+
 ---
 
 ## 1. Bối cảnh & vấn đề
@@ -39,10 +45,9 @@ native của terminal — không cần thêm mode/panel nào trong app.
 
 **Non-goal làm rõ (chặn scope creep):**
 
-- **Không** thêm copy-mode kiểu vim/tmux (visual select trong app) — bypass native đã giải quyết "chọn
-  đoạn nhìn thấy"; một mode mới phá ceiling đơn giản mà không thêm giá trị (§5.5).
-- **Không** thêm drag-to-select trong app (highlight cell, anchor/cursor selection) — cùng lý do; đây là
-  cả một subsystem render+state, vượt xa "companion liếc nhanh".
+- **Không** copy theo **ký tự / sub-line** trong app (chọn nửa dòng, chọn cột) — char-select là cả một
+  subsystem (highlight per-cell, anchor 2 chiều); line-granular đủ cho dán-vào-agent. *(Line-visual
+  selection trong app — `V` + mouse drag, line-granular — đã được `prd-preview-selection` bổ sung.)*
 - **Không** thêm phím toggle tắt mouse capture (`MouseModeNone`) — đó là một stateful mode user phải nhớ
   thoát, và trong lúc bật sẽ giết divider-drag + wheel-scroll + click-to-select; bypass native làm nó
   thừa (§5.5).
