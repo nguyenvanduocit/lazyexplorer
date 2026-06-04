@@ -14,8 +14,10 @@ func TestHelpTextSurfaces(t *testing.T) {
 	h := helpText()
 	for _, want := range []string{
 		"Y copy file content",                  // FR11: the Y key advertised on the CLI
+		"V select lines",                       // prd-preview-selection FR10: the V key advertised on the CLI
 		"hold Shift",                           // FR12: native-selection bypass instruction
 		"Option on iTerm2/macOS Terminal/tmux", // FR12: the per-terminal modifier list (D11)
+		"update",                               // prd-self-update FR9: the self-update command advertised on the CLI
 	} {
 		if !strings.Contains(h, want) {
 			t.Errorf("helpText() missing %q (FR11/FR12); got:\n%s", want, h)

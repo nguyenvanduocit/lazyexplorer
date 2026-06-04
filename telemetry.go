@@ -35,7 +35,10 @@ import (
 
 // buildVersion is the lazyexplorer version stamped into every telemetry event
 // (ddtags). Override at release time via: -ldflags="-X main.buildVersion=v0.2.0".
-var buildVersion = "0.1.0"
+// The "dev" sentinel marks an unstamped local build: telemetry reports it
+// honestly (a dev build never masquerades as a release) and `lazyexplorer
+// update` refuses to self-update it (isReleaseVersion in selfupdate.go).
+var buildVersion = "dev"
 
 // Tunables. All const so the drainer's contract is statically inspectable.
 const (

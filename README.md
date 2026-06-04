@@ -18,14 +18,40 @@ go build -o lazyexplorer .
 ./lazyexplorer ./src     # explores ./src as the jail root
 ```
 
+## Updating
+
+If you installed a release binary (from GitHub Releases or `go install`), update it
+in place:
+
+```bash
+lazyexplorer update
+```
+
+It checks the latest GitHub release, and if there is a newer version it downloads the
+archive for your OS/architecture, **verifies its SHA256** against the published
+`checksums.txt`, and atomically replaces the running binary — no root required. If you
+are already current it says so and changes nothing.
+
+- **Installed via Homebrew?** `update` detects it and defers to `brew upgrade
+  nguyenvanduocit/tap/lazyexplorer` rather than fighting the package manager.
+- **A `go build` dev binary** (version `dev`) refuses to self-update — install a release
+  to use `update`.
+
 ## Copying content
 
 - `Y` copies the **whole** previewed file's raw text to the clipboard — the clean
   source, never the colorized markdown/diff render — so it pastes straight into the
   agent's chat. (`y` copies the file's project-relative path; the two are distinct.)
-- To grab just a **visible span**, let the terminal select it natively: hold **Shift**
-  (or **Option** on iTerm2 / macOS Terminal / tmux-on-macOS) while you drag the mouse.
-  The terminal owns that selection — lazyexplorer adds no in-app copy mode.
+- `V` starts an **in-app line selection** in a scrollable preview (plain text, code,
+  or diff): the selection anchors at the top visible line, the scroll keys
+  (`j`/`k`, `ctrl+d`/`u`, `g`/`G`) extend the range — following past the bottom of the
+  viewport — and `y`/`Enter` copies the raw, de-colored lines. `Esc` cancels. You can
+  also **drag** in the preview and **release to copy** the dragged range. This reaches
+  the spans native selection can't: lines scrolled off-screen, and a clean preview
+  column in the two-pane layout.
+- For a quick **visible span**, the terminal can still select it natively: hold
+  **Shift** (or **Option** on iTerm2 / macOS Terminal / tmux-on-macOS) while you drag.
+  The terminal owns that selection — handy for full-width / single-column reads.
 
 For design rationale and contributor docs, see `docs/` and `CLAUDE.md`.
 

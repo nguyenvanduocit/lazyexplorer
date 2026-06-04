@@ -41,6 +41,7 @@ type cliArgs struct {
 	start       string // directory to explore (default ".")
 	showVersion bool
 	showHelp    bool
+	update      bool // self-update from the latest GitHub release (selfupdate.go)
 	split       bool
 	splitDir    string // "right" | "below" (default "right")
 }
@@ -56,6 +57,8 @@ func parseArgs(args []string) (cliArgs, error) {
 			out.showVersion = true
 		case a == "--help" || a == "-h" || a == "help":
 			out.showHelp = true
+		case a == "--update" || a == "update":
+			out.update = true
 		case a == "--split":
 			out.split = true
 		case strings.HasPrefix(a, "--split="):
@@ -90,9 +93,12 @@ func helpText() string {
                         Ghostty, iTerm2; default right)
   --version             print version and exit
   --help                print this help and exit
+  update                download the latest GitHub release and replace this binary,
+                        then exit (verifies SHA256; defers to brew if installed via brew)
 
 Keys: q/ctrl+c quit · j/k or ↑↓ move · l/enter open · h/← up
       d delete · r rename · e open in editor · y yank rel path · Y copy file content · J/ctrl+d page-down · K/ctrl+u page-up
+      V select lines in the preview (then y/enter to copy the range; esc cancels) — or drag in the preview to select + copy
       (to select a visible span: hold Shift — Option on iTerm2/macOS Terminal/tmux-macOS — then drag for native selection)
 
 Telemetry (opt-in): LE_TELEMETRY=1 DD_API_KEY=… — see README.md.
@@ -122,6 +128,14 @@ func main() {
 	if args.showHelp {
 		printHelp()
 		return
+	}
+
+	// Self-update is a non-TUI maintenance command: it replaces this binary with
+	// the latest GitHub release and exits, never opening the alt-screen. Resolved
+	// here BEFORE --split and InitTelemetry (D8) so an update run is not recorded
+	// as a phantom session, mirroring version/help.
+	if args.update {
+		os.Exit(runUpdate(defaultUpdateConfig()))
 	}
 
 	// Root = the directory lazyexplorer is launched in. It is the jail:

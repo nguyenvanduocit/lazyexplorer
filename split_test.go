@@ -28,6 +28,8 @@ func TestParseArgs(t *testing.T) {
 		{name: "version word", args: []string{"version"}, want: cliArgs{start: ".", splitDir: "right", showVersion: true}},
 		{name: "help long", args: []string{"--help"}, want: cliArgs{start: ".", splitDir: "right", showHelp: true}},
 		{name: "help short", args: []string{"-h"}, want: cliArgs{start: ".", splitDir: "right", showHelp: true}},
+		{name: "update word", args: []string{"update"}, want: cliArgs{start: ".", splitDir: "right", update: true}},
+		{name: "update flag", args: []string{"--update"}, want: cliArgs{start: ".", splitDir: "right", update: true}},
 		{name: "split bad value", args: []string{"--split=sideways"}, wantErr: true},
 		{name: "unknown flag", args: []string{"--foo"}, wantErr: true},
 		{name: "two positionals", args: []string{"a", "b"}, wantErr: true},
