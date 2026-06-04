@@ -22,6 +22,7 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -471,6 +472,46 @@ func TestStatusHintsReflectFocusNoChip(t *testing.T) {
 	}
 	if !hasBack {
 		t.Error("focusPreview shortHelp should include the esc/back binding")
+	}
+}
+
+// TestShortHelpIsLean — the bottom status bar is deliberately MINIMAL chrome
+// (CLAUDE.md: glance-friendly, minimal chrome; every keybind must earn its place).
+// It carries only core motion + the `?` help gateway; the long tail of bindings
+// (rename/delete/editor/yank/copy/diff/wrap/select/search/changes) is NOT crammed
+// into the glance bar — it lives one `?` away in fullHelp, the single full-keymap
+// surface. This guards the bar against silently re-accreting bindings.
+func TestShortHelpIsLean(t *testing.T) {
+	m := longPreviewModel(t, 120, 30)
+
+	// The tail that belongs in `?` (fullHelp), never in the glance bar.
+	banished := map[string]bool{
+		"r": true, "d": true, "e": true, "y": true, "Y": true,
+		"V": true, "/": true, "c": true, "ctrl+p": true,
+	}
+	hasKey := func(bs []key.Binding, want string) bool {
+		for _, b := range bs {
+			if b.Help().Key == want {
+				return true
+			}
+		}
+		return false
+	}
+
+	for _, focus := range []focusPane{focusList, focusPreview} {
+		m.focusPane = focus
+		sh := m.shortHelp()
+		if len(sh) > 5 {
+			t.Errorf("focus %v: shortHelp has %d bindings, want a lean ≤5", focus, len(sh))
+		}
+		for _, b := range sh {
+			if banished[b.Help().Key] {
+				t.Errorf("focus %v: tail binding %q leaked into the glance bar — it belongs in `?`", focus, b.Help().Key)
+			}
+		}
+		if !hasKey(sh, "?") {
+			t.Errorf("focus %v: shortHelp must keep the `?` help gateway", focus)
+		}
 	}
 }
 

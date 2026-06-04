@@ -97,8 +97,9 @@ Headline (D1) là lựa chọn **whole-vs-subrange**; mọi D sau nằm dưới 
   một search hit: Enter mở/thoát search rồi `Y` ở modeNormal.
 - **FR9** — `Y` trong modeConfirmDelete (vào qua `d`) vẫn DELETE — copy-content không shadow rune confirm.
 - **FR10** — Palette command "copy file content" làm y hệt phím `Y` (cùng `copyContent`, record một lần).
-- **FR11** — `Y` xuất hiện trong source của footer keyhint (`shortHelp`), nhóm Misc của `?` full-help, và
-  dòng Keys của `--help` CLI.
+- **FR11** — `Y` reachable từ UI qua nhóm Misc của `?` full-help (`fullHelp`) và dòng Keys của
+  `--help` CLI. (Glance bar tinh gọn không mang `Y` — discoverability sống ở `?`, xem
+  prd-keymap-and-command-palette FR14.)
 - **FR12** — `?` full-help (và README) chứa một dòng note: *để chọn một đoạn nhìn thấy, giữ Shift (hoặc
   Option trên iTerm2/macOS Terminal/tmux-macOS) rồi kéo chuột — terminal sẽ select native, không qua app.*
 
@@ -319,8 +320,8 @@ Checklist verify:
    **modeSearch** (`updateSearch` `model.go:1776`), gõ `Y` nối vào `searchQuery` và re-filter, KHÔNG copy.
 4. Guard: dir/`..` → `⚠ not a file`; binary/image → `⚠ not text`; empty → `copied … (0 bytes)`; listing
    rỗng → `⚠ nothing selected`.
-5. `Y` trong nhóm Misc của `fullHelp` (`view.go:1080`), `fullHelp` vẫn đúng **5 nhóm** (titles `view.go:1015`
-   không đổi); `Y` trong `shortHelp` (`view.go:1053`) và dòng Keys `--help` (`helpText()` trong `main.go`).
+5. `Y` trong nhóm Misc của `fullHelp` (`view.go`), `fullHelp` vẫn đúng **5 nhóm** (titles
+   `renderHelpBody` không đổi); dòng Keys `--help` (`helpText()` trong `main.go`) mang `Y`.
 6. `d`→confirm→`Y` vẫn DELETE (regression: copy-content không shadow confirm rune `model.go:1924`).
 7. Palette "copy file content" gọi `copyContent` (cùng kết quả phím `Y`); status success KHÔNG bắt đầu `⚠`
    (palette success-detect `palette.go:79,129`); palette body liệt kê command mới (`palette_test.go`).

@@ -683,9 +683,10 @@ func TestMouseDragEdgeScroll(t *testing.T) {
 	}
 }
 
-// TestSelectModeInHelp pins FR10: SelectMode appears in the Preview group of the
-// `?` full-help, fullHelp stays exactly 5 groups, and the focusPreview shortHelp
-// surfaces `V`.
+// TestSelectModeInHelp pins FR10: SelectMode is reachable from the UI via the `?`
+// full-help — it appears in the Preview group, and fullHelp stays exactly 5
+// groups. The lean status bar no longer carries `V` (the select/wrap/hscroll tail
+// moved to `?`), so the overlay is its single discoverability surface.
 func TestSelectModeInHelp(t *testing.T) {
 	m := modelAt(t, t.TempDir(), 100, 24)
 	groups := m.fullHelp()
@@ -701,18 +702,6 @@ func TestSelectModeInHelp(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("SelectMode (V) not in the Preview full-help group; got %v", helpKeys(preview))
-	}
-	// focusPreview shortHelp on a scrollable preview surfaces V.
-	sm, _ := selectionFixture(t, nil)
-	sm.focusPane = focusPreview
-	foundShort := false
-	for _, b := range sm.shortHelp() {
-		if b.Help().Key == "V" {
-			foundShort = true
-		}
-	}
-	if !foundShort {
-		t.Errorf("SelectMode (V) not in the focusPreview shortHelp bindings")
 	}
 }
 

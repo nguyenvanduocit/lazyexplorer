@@ -127,8 +127,9 @@ Headline (D1) là **hình dạng selection**; mọi D sau nằm dưới nó.
   placeholder sắp bị thay (status hint, no-op). Hai điều này giữ chỉ số dòng ổn định khi đã vào được chọn.
 - **FR9** — Chọn rồi copy record `action.copy_selection` **đúng một lần** với `{lines, bytes}`, KHÔNG log
   content.
-- **FR10** — Discoverability: `V` xuất hiện trong shortHelp của focusPreview + nhóm **Preview** của `?`
-  fullHelp; trong lúc chọn, status bar hiện hint (`y` copy · `esc` cancel).
+- **FR10** — Discoverability: `V` reachable qua nhóm **Preview** của `?` fullHelp (glance bar tinh
+  gọn không mang `V` — xem prd-keymap-and-command-palette FR14); trong lúc chọn, status bar hiện
+  hint (`y` copy · `esc` cancel).
 - **FR11** — Dải một dòng hợp lệ: `V` rồi `y` ngay (không di chuyển) copy đúng một dòng (dòng trên cùng).
 - **FR12** — `l`/`→` trong lúc chọn là **no-op** (KHÔNG copy, KHÔNG thoát) — chỉ `y`/`enter` copy (D7).
 - **FR13** — **Mouse kéo** (press trái trong pane preview của một file scrollable → di chuyển → thả): chọn
@@ -457,8 +458,8 @@ Checklist verify:
 10. **scrollSelectionIntoView**: sau mỗi `moveSelection`, dòng visual của `selCursor` ∈ `[previewTop,
     previewTop+bodyH)` (cả wrap lẫn nowrap). Off-viewport extend đẩy `previewTop` theo.
 11. **Telemetry** đúng một lần mỗi copy; log `lines`+`bytes`, KHÔNG content.
-12. **Help**: `V` trong nhóm Preview của `fullHelp` (`view.go`), trong `shortHelp` focusPreview; số nhóm
-    fullHelp không đổi (5). While-selecting status hint hiện `y`/`esc`.
+12. **Help**: `V` trong nhóm Preview của `fullHelp` (`view.go`); số nhóm fullHelp không đổi (5).
+    While-selecting status hint hiện `y`/`esc`.
 13. **Keybind**: `keyRune('V')` match `SelectMode`, không match binding khác; `CopySelection` bind `y`+`enter`
     riêng (KHÔNG `OpenEntry`), coexist với `Yank` (`y`) qua mode-lane (Yank chỉ !selecting & focusList;
     CopySelection chỉ khi selecting) — không double-map ngoài ý.

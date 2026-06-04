@@ -1103,32 +1103,23 @@ func renderShortHelp(bs []key.Binding) string {
 	return strings.Join(parts, "  ")
 }
 
-// shortHelp returns the status-bar bindings for the current focus (FR14). The
-// help text comes straight from the keymap, so it can never drift from the
-// actual bindings.
+// shortHelp returns the LEAN status-bar bindings for the current focus (FR14).
+// The bottom bar is minimal chrome (CLAUDE.md: glance-friendly; every keybind
+// must earn its place), so it carries only the core motion plus the `?` help
+// gateway — NOT the long tail (rename/delete/editor/yank/copy/diff/wrap/hscroll/
+// select/search/changes/palette), which lives one `?` away in fullHelp, the
+// single full-keymap surface. Text comes straight from the keymap so a hint can
+// never drift from its binding.
 func (m model) shortHelp() []key.Binding {
 	km := m.keymap
 	if m.focusPane == focusList {
-		return []key.Binding{
-			km.MoveDown, km.FocusToggle, km.OpenEntry, km.GoUp,
-			km.Rename, km.Delete, km.OpenInEditor, km.Yank, km.CopyContent,
-			km.CommandPalette, km.FullHelp, km.Quit,
-		}
+		// On the list you Tab INTO the preview; everything else is in `?`.
+		return []key.Binding{km.MoveDown, km.OpenEntry, km.FocusToggle, km.FullHelp, km.Quit}
 	}
-	// focusPreview. For a scrollable preview (plain/code) surface the hscroll +
-	// wrap keys; in wrap mode only the toggle is relevant (FR12). Markdown/image/
-	// folder previews are not scrollable, so those keys are omitted.
-	base := []key.Binding{km.PreviewScrollDown, km.FocusToggle, km.PreviewJumpTop, km.PreviewJumpBottom, km.PreviewHalfPageDown}
-	if m.previewScrollable {
-		if m.previewWrap {
-			base = append(base, km.PreviewToggleWrap)
-		} else {
-			base = append(base, km.PreviewScrollRight, km.PreviewHScrollHalfRight, km.PreviewHScrollReset, km.PreviewToggleWrap)
-		}
-		// Line-selection is available on a scrollable preview (plain/code/diff) only.
-		base = append(base, km.SelectMode)
-	}
-	return append(base, km.Back, km.CommandPalette, km.FullHelp, km.Quit)
+	// On the preview you scroll and Esc BACK to the list (esc subsumes the
+	// focus toggle here, so Tab is dropped to keep the bar lean). The scroll/
+	// wrap/hscroll/select keys that used to crowd this bar now live only in `?`.
+	return []key.Binding{km.PreviewScrollDown, km.Back, km.FullHelp, km.Quit}
 }
 
 // fullHelp returns the bindings grouped for the help overlay (FR15). Group order

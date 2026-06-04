@@ -9,7 +9,7 @@
 > count-prefix — đó là quyết định sau khi đọc `tmp/crush` (charmbracelet/crush) thấy
 > modern keyboard-first TUI bỏ qua vim modal mà vẫn discoverable hơn vim nhiều.
 
-Status: **accepted** · Author: feature-dev session · Reviewer: critic (independent pass, 2026-05-28) · Ngày: 2026-05-28 · Baseline shipped: 2026-05-28 (keymap registry + command palette + help — ✅ `go build && go vet && go test ./... && go test -race ./...` green) · **Rev 2026-05-28b: command palette + help render as a floating Raycast/Spotlight modal (D9/D10/D21/D22, §5.6/§5.7) — shipped 2026-05-28 (T8–T14; ✅ `go build && go vet && go test ./... && go test -race ./...` green; visual verdict palette + help PASS at 80×24 and 60×24). T13 (cross-ref prose polish) deferred.** · **Rev 2026-05-29: command-palette body restyled crush-like — box border-only (no background fill), `Commands` title + `╱` gradient rule + plain `›` input, muted rows; `renderModal` sizes the box to outer width (lipgloss v2 `.Width` is frame-inclusive — fixes the widest-row wrap). Gate + visual verdict re-PASS at 90×28 / 60×24.**
+Status: **accepted** · Author: feature-dev session · Reviewer: critic (independent pass, 2026-05-28) · Ngày: 2026-05-28 · Baseline shipped: 2026-05-28 (keymap registry + command palette + help — ✅ `go build && go vet && go test ./... && go test -race ./...` green) · **Rev 2026-05-28b: command palette + help render as a floating Raycast/Spotlight modal (D9/D10/D21/D22, §5.6/§5.7) — shipped 2026-05-28 (T8–T14; ✅ `go build && go vet && go test ./... && go test -race ./...` green; visual verdict palette + help PASS at 80×24 and 60×24). T13 (cross-ref prose polish) deferred.** · **Rev 2026-05-29: command-palette body restyled crush-like — box border-only (no background fill), `Commands` title + `╱` gradient rule + plain `›` input, muted rows; `renderModal` sizes the box to outer width (lipgloss v2 `.Width` is frame-inclusive — fixes the widest-row wrap). Gate + visual verdict re-PASS at 90×28 / 60×24.** · **Rev 2026-06-04: normal-mode `shortHelp` trimmed to a lean glance bar (FR14) — core motion + the `?` help gateway only; the long tail (rename/delete/editor/yank/copy/diff/wrap/hscroll/select/search/changes/palette) now lives solely in `fullHelp`, the single discoverability surface. Honors the "minimal chrome / every keybind earns its place" ethos. Discoverability invariant for those bindings moves from `shortHelp` to `fullHelp` (the `?` overlay) — reconciled in prd-preview-copy FR11, prd-yank-relative-path FR4/D6, prd-preview-selection FR10. ✅ `go build && go vet && go test ./...` green.**
 
 ---
 
@@ -255,16 +255,20 @@ Refactor keybind từ inline switch + hardcoded hint sang `bubbles/v2 key.Bindin
   `m.shortHelp()` via `renderShortHelp`. `shortHelp` returns `[]key.Binding`
   filtered theo focusPane.
 
-- **FR14** — `shortHelp` cho mỗi mode (D10 chốt nội dung):
+- **FR14** — `shortHelp` cho mỗi mode. Normal-mode là một **glance bar tinh gọn**:
+  chỉ core motion + cổng `?` help; cái đuôi dài (rename/delete/editor/yank/copy/
+  diff/wrap/hscroll/select/search/changes/palette) sống một phím `?` đi tới trong
+  `fullHelp` — bề mặt discoverability duy nhất cho toàn bộ keymap. Cue per-focus
+  giữ nguyên (động từ `move` ở list vs `scroll` ở preview):
   | mode | bindings shown |
   |---|---|
-  | `modeNormal` + `focusList` | MoveUpDown, FocusToggle (Tab), OpenEntry, GoUp, Rename, Delete, CommandPalette, FullHelp, Quit |
-  | `modeNormal` + `focusPreview` | ScrollUpDown, FocusToggle, JumpTop, JumpBottom, HalfPage, Back (Esc), CommandPalette, FullHelp, Quit |
+  | `modeNormal` + `focusList` | MoveDown (move), OpenEntry (open), FocusToggle (Tab — vào preview), FullHelp (`?`), Quit |
+  | `modeNormal` + `focusPreview` | ScrollDown (scroll), Back (Esc — về list), FullHelp (`?`), Quit |
   | `modeCommandPalette` (stage 1) | Filter, MoveUpDown, Select (Enter), Close (Esc) |
   | `modeCommandPalette` (stage 2 cd) | Input, Submit (Enter), Back (Esc) |
   | `modeHelp` | Scroll, Close (Esc/?) |
-  | `modeRename` | (unchanged — `view.go:483` prompt) |
-  | `modeConfirmDelete` | (unchanged — `view.go:479` prompt) |
+  | `modeRename` | (unchanged — prompt) |
+  | `modeConfirmDelete` | (unchanged — prompt) |
 
 - **FR15** — `fullHelp` returns `[][]key.Binding` nhóm theo (D13):
   *Navigation*: MoveUp, MoveDown, GoTop, GoBottom, OpenEntry, GoUp.

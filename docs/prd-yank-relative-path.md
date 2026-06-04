@@ -42,7 +42,7 @@ Nhấn `y` để copy đường dẫn của entry đang chọn **relative tới 
 | D3 | Wiring | `case key.Matches(msg, km.Yank)` trong `updateNormal` (`model.go`), focusList-only | rel path chỉ có nghĩa với một list selection. focusList-only theo đúng cluster e/r/d (selection-acting) — nhất quán hơn act-at-any-focus như ToggleDiff |
 | D4 | Edge `..` | `sel.name == ".."` → từ chối, status `⚠ nothing to yank` | `selectedAbsPath()` trên `..` trả về parent dir; `relRoot(root, root) == "."` — copy `"."` vô dụng trong chat. Từ chối bằng TÊN (như open-in-editor) ở tầng dispatch, không string-match `"."` |
 | D5 | Dir thật yankable | Real directory (không `..`) → copy bình thường | Khác open-in-editor (chỉ file): dán đường dẫn thư mục vào chat agent là hợp lệ ("look at src/handlers/") |
-| D6 | Help surfaces | `Yank` vào nhóm **Misc** của `fullHelp` (`view.go`, cạnh `Quit`) + footer `shortHelp` focusList + dòng Keys của `--help` | clipboard utility, không phải mutation/mode. Giữ `fullHelp` đúng **5 nhóm** (titles `renderHelpBody` phụ thuộc) — join nhóm có sẵn, không tạo nhóm thứ 6 |
+| D6 | Help surfaces | `Yank` vào nhóm **Misc** của `fullHelp` (`view.go`, cạnh `Quit`) + dòng Keys của `--help`. (Glance bar tinh gọn không mang `y` — discoverability sống ở `?`; xem prd-keymap-and-command-palette FR14.) | clipboard utility, không phải mutation/mode. Giữ `fullHelp` đúng **5 nhóm** (titles `renderHelpBody` phụ thuộc) — join nhóm có sẵn, không tạo nhóm thứ 6 |
 | D7 | Shared helper + twin | `func (m *model) yankRelPath()` chứa guard→`relRoot`→`writeClipboard`→status→**một** `tel.Record`; cả phím `y` lẫn palette "copy relative path" gọi nó | Ledger note của open-in-editor cảnh báo split twin **double-records** telemetry. Một code path → record đúng một lần. (Khá hơn guard *nhân đôi* của open-in-editor) |
 | D8 | Telemetry | `m.tel.Record("action.yank_rel", {rel})` một lần, trong `yankRelPath` | Đo adoption. Log `rel` (đã project-relative, không lộ machine-absolute prefix) |
 
@@ -53,8 +53,8 @@ Nhấn `y` để copy đường dẫn của entry đang chọn **relative tới 
   `⚠ clipboard: …` (no helper). rel là slash-form, không tiền tố root.
 - **FR2** — Cursor trên `..` synthetic → không copy, status `⚠ nothing to yank` (không copy `"."`).
 - **FR3** — Listing rỗng → không copy, status `⚠ nothing selected`. focusPreview → no-op.
-- **FR4** — `y` nằm trong source của footer keyhint (`shortHelp` focusList), nhóm Misc của `?`
-  full-help, và dòng Keys của `--help` CLI.
+- **FR4** — `y` reachable từ UI qua nhóm Misc của `?` full-help (`fullHelp`) và dòng Keys của
+  `--help` CLI. (Glance bar tinh gọn không mang `y` — xem prd-keymap-and-command-palette FR14.)
 - **FR5** — Palette command "copy relative path" làm y hệt phím `y` (cùng `yankRelPath`, record một lần).
   Command "copy absolute path" (đổi tên từ "copy path") giữ năng lực copy absolute.
 - **FR6** — `y` trong modeConfirmDelete (vào qua `d`) vẫn DELETE — yank không shadow rune confirm.

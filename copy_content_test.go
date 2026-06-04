@@ -340,18 +340,21 @@ func TestCopyContentDoesNotShadowDeleteConfirm(t *testing.T) {
 	}
 }
 
-// TestCopyContentInShortHelp pins FR11: the `Y` hint appears in the focusList
-// status-bar bindings (shortHelp), sourced from the keymap so it can't drift.
-func TestCopyContentInShortHelp(t *testing.T) {
+// TestCopyContentInHelp pins FR11: the `Y` binding is reachable from the UI via
+// the `?` full-help overlay (fullHelp's Misc group). The lean status bar no
+// longer carries the long tail — discoverability lives in `?`, sourced from the
+// keymap so it can't drift.
+func TestCopyContentInHelp(t *testing.T) {
 	m := modelAt(t, t.TempDir(), 100, 30)
-	m.focusPane = focusList
+	groups := m.fullHelp()
+	misc := groups[len(groups)-1] // Navigation, Preview, Mutation, Modes, Misc
 	found := false
-	for _, b := range m.shortHelp() {
+	for _, b := range misc {
 		if b.Help().Key == "Y" {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("CopyContent (Y) not in the focusList shortHelp bindings")
+		t.Errorf("CopyContent (Y) not in the Misc full-help group")
 	}
 }

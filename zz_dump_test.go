@@ -530,3 +530,73 @@ func TestDumpCwdHeaderFrames(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestDumpLeanStatusBarFrames is the visual-verdict harness for the lean
+// glance-bar trim (docs/prd-keymap-and-command-palette.md FR14, Rev 2026-06-04).
+// It writes two ANSI frames to $LAZYEXPLORER_DUMP_DIR for freeze → PNG → agent
+// verdict that the bottom status bar now reads as MINIMAL chrome — core motion +
+// the `?` help gateway — with the long tail of bindings gone to the `?` overlay:
+//
+//	leanbar-list-100x24    — list focused: the footer reads roughly
+//	                    "[↑/k ↓/j] move down  [enter/l] open  [tab] switch focus
+//	                    [?] help  [q] quit" — a short, uncrowded line that no
+//	                    longer clips at 100 cols (the old 12-binding bar did).
+//	leanbar-preview-100x24 — preview focused on a scrollable file: the footer
+//	                    reads "[↓/j] scroll down  [esc] back  [?] help  [q] quit"
+//	                    — the verb is "scroll" (per-focus cue retained), the
+//	                    hscroll/wrap/select tail absent.
+//
+// Run with:
+//
+//	LAZYEXPLORER_DUMP_DIR=/tmp/le-leanbar go test -run TestDumpLeanStatusBarFrames .
+func TestDumpLeanStatusBarFrames(t *testing.T) {
+	outDir := os.Getenv("LAZYEXPLORER_DUMP_DIR")
+	if outDir == "" {
+		t.Skip("set LAZYEXPLORER_DUMP_DIR to dump View() frames for visual verdict")
+	}
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// A scrollable text file so the preview-focus frame is a real, scrollable
+	// preview (the "scroll" verb is meaningful). Lines are kept SHORT so they fit
+	// the preview pane with no horizontal overflow — the nowrap `›` edge indicator
+	// (correct behavior, prd-horizontal-scroll-preview) would otherwise add noise
+	// that distracts from the subject of this frame, the lean status bar.
+	dir := t.TempDir()
+	var sb strings.Builder
+	for i := 0; i < 80; i++ {
+		sb.WriteString("preview text line\n")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte(sb.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"main.go", "README.md"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("package main\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Frame 1: list focused — the lean focusList bar.
+	mList := modelAt(t, dir, 100, 24)
+	mList.renderStyle = "dark"
+	mList.renderNow()
+	if err := os.WriteFile(filepath.Join(outDir, "leanbar-list-100x24.ansi"), []byte(mList.View().Content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Frame 2: preview focused on the scrollable text file — the lean focusPreview bar.
+	mPrev := modelAt(t, dir, 100, 24)
+	mPrev.renderStyle = "dark"
+	for i, e := range mPrev.entries {
+		if e.name == "notes.txt" {
+			mPrev.cursor = i
+		}
+	}
+	mPrev.refreshPreview()
+	mPrev.focusPane = focusPreview
+	mPrev.renderNow()
+	if err := os.WriteFile(filepath.Join(outDir, "leanbar-preview-100x24.ansi"), []byte(mPrev.View().Content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
