@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"image"
+	"image/color"
 	_ "image/gif"  // register GIF decoder for image.DecodeConfig
 	_ "image/jpeg" // register JPEG decoder
 	_ "image/png"  // register PNG decoder
@@ -17,6 +18,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"charm.land/lipgloss/v2"
 	"github.com/alecthomas/chroma/v2"
 	"github.com/alecthomas/chroma/v2/formatters"
 	"github.com/alecthomas/chroma/v2/lexers"
@@ -231,9 +233,13 @@ const (
 	// than it actually draws: fitWidth leaves it untruncated, the terminal
 	// hard-wraps the overflow onto a second row, the preview panel outgrows its
 	// declared height, and the whole frame spills past the screen so it scrolls.
-	// 8 matches the terminal default (and `cat`), so previewed indentation reads
-	// the same as the file does elsewhere. (Pattern mirrors charmbracelet/crush.)
-	previewTabWidth = 8
+	// The width is 2, narrower than the terminal/`cat` default of 8: the preview
+	// is a slim column beside the agent, where an 8-wide tab stop burns horizontal
+	// room and pushes code off-screen. Two spaces keep nesting legible while
+	// maximizing visible content. It is applied uniformly — plain text, code and
+	// markdown (normalizeText) and the diff view (diffHunks) — so one file's
+	// indentation reads identically in every preview mode.
+	previewTabWidth = 2
 )
 
 // readPreviewBytes reads up to maxPreviewBytes of path and classifies what it
@@ -416,6 +422,16 @@ func isCode(name string) bool { return matchLang(name) != "" }
 // token's background so code inherits the panel background instead of painting
 // style-defined background stripes — mirrors charmbracelet/crush's highlighter.
 func highlightCode(source, name string) ([]string, error) {
+	return highlightCodeBg(source, name, "")
+}
+
+// highlightCodeBg is highlightCode with an optional background WASH (bgHex != "")
+// painted behind every token. The diff renderer uses it to tint an added line green and
+// a removed line red (D11): because the wash is set on each chroma token, it survives
+// chroma's per-token "\x1b[0m" resets — a whole-line lipgloss background would be
+// clobbered mid-line. bgHex == "" clears the background (code inherits the panel
+// background), the default for the plain code preview.
+func highlightCodeBg(source, name, bgHex string) ([]string, error) {
 	l := lexers.Match(name)
 	if l == nil {
 		return nil, nil
@@ -430,8 +446,12 @@ func highlightCode(source, name string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	var bg chroma.Colour // zero clears the background (code inherits the panel bg)
+	if bgHex != "" {
+		bg = chroma.MustParseColour(bgHex)
+	}
 	style, err := styles.Get(codeHighlightStyle).Builder().Transform(
-		func(e chroma.StyleEntry) chroma.StyleEntry { e.Background = 0; return e },
+		func(e chroma.StyleEntry) chroma.StyleEntry { e.Background = bg; return e },
 	).Build()
 	if err != nil {
 		style = styles.Get(codeHighlightStyle) // rare: use the style as-is
@@ -476,29 +496,104 @@ func isImage(name string) bool {
 	return false
 }
 
-// renderImagePreview is a scaffold renderer (binary: true) — it does not draw the
-// image (terminal-graphics is future work) but proves the binary-renderer path:
-// it reads the file header for real metadata and shows it, an upgrade over the old
-// "(binary file — skipped)". It never errors — a header it cannot decode (webp/bmp
-// have no stdlib decoder) still reports the size. preStyled is false: the line is
-// a plain placeholder, so renderPreview keeps fitWidth on it.
-func renderImagePreview(path string, _ []byte, _ int, _ string) ([]string, bool, error) {
+// renderImagePreview draws a raster image inline in the preview pane as half-block
+// ANSI (prd-inline-image-view): it decodes the file (png/jpeg/gif via stdlib), scales
+// to the pane width, and renders via imageToHalfBlocks. Returns pre-styled ANSI lines
+// (preStyled=true) so renderPreview keeps the SGR verbatim. It never errors — a file
+// it cannot decode (webp/bmp have no stdlib decoder, or a corrupt image) degrades to a
+// dim metadata line (D6), so the pane is never empty. The decode + scale is heavy but
+// runs off the Update goroutine (the registry render Cmd in syncPreview is async).
+func renderImagePreview(path string, _ []byte, width int, _ string) ([]string, bool, error) {
+	if width <= 0 {
+		return imageFallback(path, "pane too narrow"), false, nil
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return imageFallback(path, "could not open"), false, nil
+	}
+	defer f.Close()
+	img, _, err := image.Decode(f)
+	if err != nil {
+		return imageFallback(path, "inline preview not supported"), false, nil
+	}
+	lines := imageToHalfBlocks(img, width)
+	if len(lines) == 0 {
+		return imageFallback(path, "inline preview not supported"), false, nil
+	}
+	return lines, true, nil
+}
+
+// imageFallback is the dim metadata line shown when an image cannot be drawn (D6):
+// it reports format + dimensions (when DecodeConfig can read the header) and size, so
+// even an undrawable image tells the user what it is. plain (preStyled=false caller).
+func imageFallback(path, reason string) []string {
 	var size int64
 	if info, err := os.Stat(path); err == nil {
 		size = info.Size()
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		return []string{dimStyle.Render("(image — " + humanSize(size) + ", could not open)")}, false, nil
+		return []string{dimStyle.Render("(image — " + humanSize(size) + ", " + reason + ")")}
 	}
 	defer f.Close()
-	cfg, format, err := image.DecodeConfig(f)
-	if err != nil {
-		return []string{dimStyle.Render("(image — " + humanSize(size) + ", inline preview not supported)")}, false, nil
+	cfg, format, derr := image.DecodeConfig(f)
+	if derr != nil {
+		return []string{dimStyle.Render("(image — " + humanSize(size) + ", " + reason + ")")}
 	}
-	line := fmt.Sprintf("(image %s — %d×%d, %s — inline preview not supported)",
-		strings.ToUpper(format), cfg.Width, cfg.Height, humanSize(size))
-	return []string{dimStyle.Render(line)}, false, nil
+	return []string{dimStyle.Render(fmt.Sprintf("(image %s — %d×%d, %s — %s)",
+		strings.ToUpper(format), cfg.Width, cfg.Height, humanSize(size), reason))}
+}
+
+// imageToHalfBlocks renders img as half-block ANSI lines fit to `cols` cells wide
+// (prd-inline-image-view D1/D3). Each text cell is a `▀` (upper half block) whose
+// FOREGROUND is the upper pixel and BACKGROUND the lower pixel, so one cell shows two
+// vertically-stacked pixels — a `cols × rows` cell grid carries `cols × rows·2` pixels.
+// The image is scaled (nearest-neighbor, no dep) to `cols` px wide — never UP past its
+// natural width (a tiny icon stays crisp) — and a proportional pixel height, so aspect
+// is preserved (the 1×2 cell shape falls out of the px math, no fudge factor). The last
+// cell row of an odd-height image draws only its top pixel (no background). Pure +
+// width-agnostic-of-height: a tall image yields more rows than the pane and scrolls
+// vertically like any preview.
+func imageToHalfBlocks(img image.Image, cols int) []string {
+	b := img.Bounds()
+	imgW, imgH := b.Dx(), b.Dy()
+	if imgW <= 0 || imgH <= 0 || cols <= 0 {
+		return nil
+	}
+	w := cols
+	if w > imgW {
+		w = imgW // do not upscale beyond the image's natural width
+	}
+	hpx := (w*imgH + imgW/2) / imgW // scaled pixel height, aspect-preserving (rounded)
+	if hpx < 1 {
+		hpx = 1
+	}
+	rows := (hpx + 1) / 2 // two pixel rows per cell
+	lines := make([]string, rows)
+	var sb strings.Builder
+	for r := 0; r < rows; r++ {
+		sb.Reset()
+		topPy, botPy := 2*r, 2*r+1
+		for x := 0; x < w; x++ {
+			sx := b.Min.X + x*imgW/w
+			top := lipglossColorAt(img, sx, b.Min.Y+topPy*imgH/hpx)
+			st := lipgloss.NewStyle().Foreground(top)
+			if botPy < hpx {
+				st = st.Background(lipglossColorAt(img, sx, b.Min.Y+botPy*imgH/hpx))
+			}
+			sb.WriteString(st.Render("▀"))
+		}
+		lines[r] = sb.String()
+	}
+	return lines
+}
+
+// lipglossColorAt is the 8-bit hex lipgloss color of the pixel at (x, y). image RGBA()
+// returns 16-bit alpha-premultiplied channels; the high byte is the 8-bit value (alpha
+// is ignored — an image preview treats pixels as opaque).
+func lipglossColorAt(img image.Image, x, y int) color.Color {
+	r, g, bl, _ := img.At(x, y).RGBA()
+	return lipgloss.Color(fmt.Sprintf("#%02x%02x%02x", r>>8, g>>8, bl>>8))
 }
 
 // renderMarkdown renders raw markdown to ANSI-styled, width-wrapped lines via

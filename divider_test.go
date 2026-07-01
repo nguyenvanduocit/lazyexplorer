@@ -364,9 +364,11 @@ func TestYDividerDrag(t *testing.T) {
 }
 
 // TestWheelInVerticalRoutesByY: wheel in the list region (Y < dividerYStart)
-// moves the cursor; wheel in the preview region (Y > dividerYStart) scrolls
-// the preview; wheel exactly on the glyph row noops (FR9). Single-row hit
-// zone keeps the divider's own row as the only noop band.
+// SCROLLS THE LIST viewport (listTop) while leaving the selection put (cursor); wheel
+// in the preview region (Y > dividerYStart) scrolls the preview; wheel exactly on the
+// glyph row noops (FR9). Single-row hit zone keeps the divider's own row as the only
+// noop band. The selection never changes from a wheel — a scroll scrolls, it does not
+// re-select (wheel-pans-list-not-cursor).
 func TestWheelInVerticalRoutesByY(t *testing.T) {
 	root := t.TempDir()
 	for i := range 20 {
@@ -377,26 +379,24 @@ func TestWheelInVerticalRoutesByY(t *testing.T) {
 		name        string
 		y           int
 		btn         tea.MouseButton
-		wantCursor  int // -1 means unchanged from setup
-		wantPreview int // -1 means unchanged from setup
+		wantListTop int // list scroll offset after the wheel (setup = 3)
+		wantPreview int // preview scroll offset after the wheel (setup = 0)
 	}{
-		{"wheel up in list region", 3, tea.MouseWheelUp, 4, 0},     // cursor 5 → 4
-		{"wheel down in list region", 3, tea.MouseWheelDown, 6, 0}, // cursor 5 → 6
-		{"wheel on glyph row noop", 8, tea.MouseWheelUp, 5, 0},
-		{"wheel on glyph row down noop", 8, tea.MouseWheelDown, 5, 0},
-		{"wheel up in preview region", 15, tea.MouseWheelUp, 5, 0},     // already at top, scroll noops
-		{"wheel down in preview region", 15, tea.MouseWheelDown, 5, 1}, // one notch = previewLineStep (1), smooth scroll
+		{"wheel up in list region", 3, tea.MouseWheelUp, 2, 0},     // listTop 3 → 2
+		{"wheel down in list region", 3, tea.MouseWheelDown, 4, 0}, // listTop 3 → 4
+		{"wheel on glyph row noop", 8, tea.MouseWheelUp, 3, 0},     // over the divider → noop
+		{"wheel on glyph row down noop", 8, tea.MouseWheelDown, 3, 0},
+		{"wheel up in preview region", 15, tea.MouseWheelUp, 3, 0},     // preview already at top → noop
+		{"wheel down in preview region", 15, tea.MouseWheelDown, 3, 1}, // one notch = previewLineStep
 	}
 	for _, c := range cases {
 		m := modelAt(t, root, 70, 24)
 		m.cursor = 5
+		m.listTop = 3 // mid-scroll, so both up and down register
 		m.previewTop = 0
-		// Need previewLen > bottomInner for scroll-down to register; the file
-		// preview is short, but a folder with 20 entries gives us length 20.
-		// Setup: cursor=5 points at a file → previewLen = len(m.preview);
-		// for the scroll-down test we want a previewLen big enough. Force
-		// preview lines to 50 so one wheel notch (previewLineStep) registers
-		// without clamping to 0.
+		// Need previewLen > bottomInner for the preview scroll-down to register; force
+		// 50 fake preview lines so one wheel notch (previewLineStep) moves without
+		// clamping to 0.
 		fakePreview := make([]string, 50)
 		for i := range fakePreview {
 			fakePreview[i] = "x"
@@ -407,8 +407,11 @@ func TestWheelInVerticalRoutesByY(t *testing.T) {
 		nm, _ := m.handleMouse(tea.MouseWheelMsg{X: 5, Y: c.y, Button: c.btn})
 		m2 := nm.(model)
 
-		if m2.cursor != c.wantCursor {
-			t.Errorf("%s: cursor = %d, want %d", c.name, m2.cursor, c.wantCursor)
+		if m2.cursor != 5 {
+			t.Errorf("%s: a wheel must never change the selection; cursor = %d, want 5", c.name, m2.cursor)
+		}
+		if m2.listTop != c.wantListTop {
+			t.Errorf("%s: listTop = %d, want %d", c.name, m2.listTop, c.wantListTop)
 		}
 		if m2.previewTop != c.wantPreview {
 			t.Errorf("%s: previewTop = %d, want %d", c.name, m2.previewTop, c.wantPreview)

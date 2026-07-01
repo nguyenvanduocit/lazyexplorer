@@ -1,10 +1,12 @@
 # PRD — Diff view trong preview pane cho file đã đổi
 
-> Feature: khi cursor đứng trên một **file tracked đã sửa**, preview pane hiển thị **diff**
-> của nó — các dòng thêm (xanh) / bớt (đỏ) đã tô màu, tính so với **cùng base HEAD** mà badge
-> `+N/-N` đếm — thay vì nội dung file đầy đủ. Một phím **`v`** toggle giữa diff và full file.
+> Feature: khi cursor đứng trên một **file tracked đã sửa**, preview pane hiển thị **toàn bộ
+> file dưới dạng diff** — mọi dòng không đổi giữ làm context (mờ), các dòng thêm (xanh) / bớt
+> (đỏ) tô màu tại chỗ, tính so với **cùng base HEAD** mà badge `+N/-N` đếm. Một phím **`v`**
+> toggle giữa diff (full-file) và **nội dung file render thường** (markdown/code/plain).
 > File sạch / untracked preview như hôm nay. Mục tiêu: đóng nhịp trung tâm của vibe-code loop
-> — *review-the-edit-before-accept* — ngay trong pane, không tab-away ra terminal.
+> — *review-the-edit-before-accept* — ngay trong pane, đọc đổi gì trong ngữ cảnh cả file,
+> không tab-away ra terminal.
 
 Status: **accepted** · Author: phiên spec preview-diff · Ngày: 2026-05-29
 
@@ -46,10 +48,11 @@ hai renderer sống cùng pipeline mà ta mượn contract `(lines, preStyled, e
 
 ## 2. Goal (1 câu)
 
-Khi cursor đứng trên một file tracked đã sửa, preview pane mặc định hiển thị **diff đã tô màu**
-của nó (dòng thêm/bớt, tính so với cùng HEAD mà badge đếm), và một phím `v` toggle về **full
-file content** — file sạch/untracked vẫn preview nội dung như hôm nay — để user review edit
-ngay trong pane.
+Khi cursor đứng trên một file tracked đã sửa, preview pane mặc định hiển thị **toàn bộ file
+dưới dạng diff đã tô màu** (mọi dòng không đổi giữ làm context, dòng thêm/bớt tô màu tại chỗ,
+tính so với cùng HEAD mà badge đếm), và một phím `v` toggle về **nội dung file render thường**
+(markdown/code/plain) — file sạch/untracked vẫn preview nội dung như hôm nay — để user review
+edit trong ngữ cảnh cả file, ngay trong pane.
 
 **Non-goal làm rõ:**
 - KHÔNG **diff MODE** mới — không `modeDiff` với nhánh `Update` riêng. Đây là một **content
@@ -77,13 +80,13 @@ ngay trong pane.
 | D2 | Kiến trúc dispatch | Diff là content variant **state-selected ở model layer** (`refreshPreview`/`syncPreview`), **KHÔNG** name-matched qua registry | "file này dirty không" là **git/model state**, không phải thuộc tính filename. `previewRenderer.matches func(name string) bool` (`fs.go:345`) quyết định *thuần* theo tên — nó **không thể** thấy git state. Markdown-vs-code là quyết định filename thuần; diff-vs-content là quyết định `(dirty, diffOn)`. Nhồi git-state vào `matches(name)` closure là workaround engineering bar cấm; đổi signature mọi renderer là dead code. Closure diff bespoke capture `repoRoot` + path, giữ shape `previewRenderedMsg` để `applyPreview` không đổi |
 | D3 | Mặc định toggle | `diffOn` mặc định **TRUE**, session-sticky | Goal: "khi land vào file agent đổi, preview show diff … một phím toggle về full file". Diff-first khi land; toggle đi về full file. Đây là điểm **ngược** wrap (wrap mặc định off): copy default-off của wrap sẽ lặng lẽ defeat goal. Sticky như wrap (review nhiều file dirty liên tiếp, file sạch auto-fallback content) — không reset per file |
 | D4 | Phím toggle | **`v`** (view-diff / view-changes), normal mode, fire ở **mọi focus** | `v` unbound khắp nơi (ĐÃ VERIFY ✅ 2026-05-29 `keys.go`/`model.go`/`palette.go`). Free key mnemonic gần `g G h l H L 0 w` đã taken (`keys.go:74-82`). Flow là scan file dirty ở `focusList` → toggle phải fire ở focusList; cũng fire vô hại ở focusPreview. Keybind surface +1 (từ ~26), proportionate cho action review-before-accept tần suất cao nhất |
-| D5 | Áp dụng cho file nào | **Modified text → hunks**; untracked → full content (path sẵn có); binary-modified → placeholder "binary files differ"; sạch/dir/`..` → như hôm nay | Chỉ modified-text có "diff so với HEAD" nghĩa. Untracked là all-new → full content **là** diff hữu ích (đã trong scope content path). Binary diff vô nghĩa trong terminal → placeholder. Deleted/renamed **unreachable** (xem D6) |
+| D5 | Áp dụng cho file nào | **Modified text → full-file diff** (toàn bộ file, dòng không đổi làm context); untracked → full content (path sẵn có); binary-modified → placeholder "binary files differ"; sạch/dir/`..` → như hôm nay | Chỉ modified-text có "diff so với HEAD" nghĩa. Untracked là all-new → full content **là** diff hữu ích (đã trong scope content path). Binary diff vô nghĩa trong terminal → placeholder. Deleted/renamed **unreachable** (xem D6) |
 | D6 | Codes nào tới được preview & đi đâu | List pane render entry **working-tree** (`os.ReadDir` `fs.go:40-61`), nên cursor chỉ đứng lên được file **còn tồn tại trên đĩa**. Reachable codes (`collapseStatus` `git.go:234-252`) + đích: **modified (`M`)** & **renamed (`R`, phía mới)** text → **diff**; **added (`A`, staged-new)** & **untracked (`?`)** → **full content**; **conflict (`U`/`AA`/`DD`)** → **full content**; binary-modified → placeholder (FR5). Deleted (`D`) & phía cũ của rename **không có row** → không tới được preview | "No abstractions until proven": build nhánh deleted/old-rename = dead code. `A`/untracked là **all-new** → content **là** diff hữu ích (D5). Conflict: full content cho user đọc thẳng marker `<<<<<<<`/`=======`/`>>>>>>>` — combined-diff của file conflict là noise, không phải review-the-edit. ĐÃ VERIFY ✅ 2026-05-29: `collapseStatus` emit đúng 5 code; `D`/old-rename unreachable (`fs.go` chỉ list file working-tree). `diffApplies` chỉ true cho `M`/`R`+text → mọi code khác tự nhiên rơi về content path (D5/FR4), KHÔNG cần nhánh riêng |
 | D7 | Base khớp badge | `git diff HEAD -- <path>` khi có HEAD; `git diff --cached -- <path>` khi repo chưa commit | **Cùng** branch HEAD-aware mà numstat dùng (`git.go:177-183`) → dòng hiện ra reconcile với `+N/-N` của badge. ĐÃ VERIFY ✅ 2026-05-29: `diff HEAD` fatal exit 128 khi no-commit, `diff --cached` trả hunks exit 0; `diff HEAD` repo committed trả unified diff với `@@`/` `/`-`/`+` |
 | D8 | Async + stale guard | Closure diff chạy off Update goroutine qua `tea.Cmd`, honor `renderGen` gen-counter; `applyPreview` gen-gate **không đổi** | Uncompromising-engineering bar dưới small surface: scroll nhanh qua nhiều file dirty không bao giờ show diff file sai. Khớp mọi renderer khác (`syncPreview`/`applyPreview` `model.go:745-867`) |
 | D9 | Render style | Diff `previewScrollable=true` + `preStyled=true` — mirror code | Diff thừa kế vertical scroll (`previewScroll`) + horizontal window (`renderHWindow` `view.go:645`) sẵn có; dòng tô ANSI verbatim như code. Dòng diff dài (vd `+    veryLongLine`) pan được, không wrap-cứng |
 | D10 | Empty diff dù badge M | `git diff` rỗng (mode-only / whitespace-config) → fallback **full content** | Badge `M` có thể từ thay đổi mode/EOL mà `git diff` text rỗng. Render pane rỗng là bug nhìn thấy được; fallback content giữ pane hữu ích (cùng tinh thần D5 untracked) |
-| D11 | Màu diff | thêm `colDiffAdd` (xanh, tái dùng `colGitNew` `theme.go:24`), `colDiffDel` (đỏ, tái dùng `colDanger` `theme.go:20`); hunk header `@@`/context → `colDim` | Quy ước `git diff` CLI: thêm xanh / bớt đỏ / context mờ. Tái dùng palette git sẵn có → một accent family, không thêm màu lạ. Dấu `+`/`-` đầu dòng giữ nên đọc được cả khi mất màu |
+| D11 | Màu diff | File **mã nguồn** (chroma nhận diện qua `matchLang` `fs.go`): **toàn bộ file** syntax-highlight (chroma) — context lẫn dòng đổi đều tô màu cú pháp như `v` full-content view — và tín hiệu diff là một **background WASH cả dòng**: dòng thêm nền xanh tối (`colDiffAddBg` `theme.go`), dòng bớt nền đỏ tối (`colDiffDelBg`), context không nền. **KHÔNG gutter glyph** → code bắt đầu ở cột 0, không tốn space ở đầu (user chốt 2026-06-04: "highlight bằng background, đừng tốn space ở đầu"). Wash đặt qua `highlightCodeBg` — set background trên **mỗi chroma token** nên sống qua reset `\x1b[0m` của chroma (background cả-dòng kiểu lipgloss sẽ bị xoá giữa dòng). 3 lượt tokenize (`highlightCodeBg` ctx no-wash / add green / del red) trên NEW+OLD side reconstruct **nguyên file** (full-file context D7) nên chroma thấy ngữ cảnh đa dòng (block comment, multi-line string) — dòng đổi trong `/* */` tô màu comment. File **không phải mã nguồn**: tô theo role cả dòng + giữ gutter `+`/`-` raw (`+` xanh / `-` đỏ / context + `@@` `colDim`) | "vừa có highlight vừa có diff": cả file đọc như code màu cú pháp **và** dòng đổi nổi nhờ nền xanh/đỏ — chuẩn delta/GitHub. Nền (không gutter) vì user muốn không tốn space ở đầu, và 3 verdict liên tiếp xác nhận một gutter glyph/bar quá yếu trên nền context đã highlight. Đặt nền per-token (không phải foreground cả-dòng hay lipgloss wrap) là cách duy nhất sống qua chroma reset (FR8). Đánh đổi: không còn `+`/`-` trong Y/V copy buffer (copy ra source thuần) và mất tín hiệu khi terminal mất màu — chấp nhận theo yêu cầu user |
 | D12 | Toggle invalidation | Handler `v`: flip `diffOn` rồi gọi `refreshPreview()` | `refreshPreview` reset `srcWidth=0`/`pendingWidth=0` (`model.go:519-525`) → `syncPreview` staleness check `srcWidth==w` (`model.go:761`) fire, re-dispatch. Bỏ `refreshPreview` thì toggle thành no-op (width+srcPath không đổi, cache guard nuốt). KHÔNG bịa invalidation path mới |
 | D13 | Live-refresh khi parked | Diff của file đang **đứng cursor** auto cập nhật trên poll loop khi agent ghi lại file — **không** cần navigate-away-and-back; KHÔNG thêm máy móc refresh mới | Đúng nhịp dogfood: agent sửa file user đang nhìn → diff phải tươi. ĐÃ VERIFY ✅ 2026-05-29: agent re-save đổi size/mtime → `dirSig` fire (`model.go:411`) → byte-identity guard (`model.go:457-461`) KHÔNG short-circuit → `syncFromDisk` gọi `refreshPreview()` (`model.go:466`) → `diffApplies`/`previewIsDiff` tính lại + `syncPreview` re-dispatch `diffHunks` vs HEAD hiện tại. Diff thừa kế **cùng** cơ chế live-refresh content preview đã có (consistency, không code mới) |
 | D14 | Toggle telemetry | Handler `v` record `action.preview_diff_toggle` `{diff: m.diffOn}` | Mirror wrap toggle `action.preview_wrap_toggle` (`model.go:710`) — consistency-is-kindness. Engineering-beneath, không phải UI surface; non-blocking Record (drop-on-full) nên không kéo dài tick |
@@ -91,13 +94,18 @@ ngay trong pane.
 ## 4. Functional requirements
 
 - **FR1** — Khi cursor đứng trên một **file tracked đã sửa** (badge `M`/`R`) là **text** và
-  `diffOn` (mặc định true, D3), preview pane render **diff** của file đó: dòng thêm tô
-  `colDiffAdd`, dòng bớt tô `colDiffDel`, hunk header (`@@…`) + context tô `colDim` (D11).
+  `diffOn` (mặc định true, D3), preview pane render **toàn bộ file dưới dạng diff** (D11). File
+  **mã nguồn**: dòng **đổi** (`+`/`-`) syntax-highlight bằng chroma với gutter glyph xanh/đỏ
+  (`colDiffAdd`/`colDiffDel`), dòng **context** tô `colDim` để dòng đổi nổi. File **không phải mã
+  nguồn**: dòng thêm tô `colDiffAdd`, dòng bớt tô `colDiffDel`, context + hunk header (`@@…`) tô
+  `colDim`. File hiện **đầy đủ** — không cắt về cửa sổ hunk.
 - **FR2** — Diff tính qua `git diff HEAD -- <path>` (có HEAD) hoặc `git diff --cached -- <path>`
   (repo chưa commit) — **cùng** base HEAD-aware mà badge `+N/-N` dùng (D7/`git.go:177-183`), nên
-  số dòng `+`/`-` trong diff reconcile với delta của badge. Diff mang **context mặc định 3 dòng**
-  của `git diff` (không truyền `-U`), tô `colDim`. Reconcile với badge **chỉ đếm dòng `+`/`-`** —
-  dòng context (` ` đầu dòng) KHÔNG tính vào `+N/-N`.
+  số dòng `+`/`-` trong diff reconcile với delta của badge. Diff mang **full-file context**
+  (`git diff -U<lớn>`, hằng `diffFullContext` `git.go`): mọi dòng không đổi của file hiện làm
+  context tô `colDim`, không cắt về cửa sổ hunk mặc định. Reconcile với badge **chỉ đếm dòng
+  `+`/`-`** — dòng context (` ` đầu dòng) KHÔNG tính vào `+N/-N`, nên kích thước context không
+  ảnh hưởng con số badge.
 - **FR3** — Phím **`v`** (D4) toggle giữa diff view và **full-file content view**. Toggle ở
   `diffOn=true` → diff (cho file đủ điều kiện); toggle về `diffOn=false` → nội dung file đầy
   đủ qua renderer sẵn có (markdown/code/plain). `diffOn` **session-sticky**, không reset khi
@@ -163,12 +171,17 @@ func diffHunks(repoRoot, relPath string, width int) ([]string, bool, error)
 ```
 
 Bên trong:
-1. HEAD-aware base (D7) + `--no-color`: `runGit(repoRoot, "rev-parse", "--verify", "-q", "HEAD")`
-   thành công → `runGit(repoRoot, "diff", "--no-color", "HEAD", "--", relPath)`; lỗi →
-   `runGit(repoRoot, "diff", "--no-color", "--cached", "--", relPath)`. Cùng branch numstat dùng
-   (`git.go:177-183`). `--no-color` ép git xuất plain ngay cả khi repo/global đặt
-   `color.ui=always` (hoặc `color.diff=always`) — không có nó git tự nhét SGR escape vào mỗi dòng
-   `+`/`-`, khiến `diffPrefix` đọc `line[0]==0x1b` và cả diff tô mờ thay vì xanh/đỏ (D11/FR1).
+1. HEAD-aware base (D7) + `--no-color` + **full-file context** `-U<diffFullContext>`:
+   `runGit(repoRoot, "rev-parse", "--verify", "-q", "HEAD")` thành công →
+   `runGit(repoRoot, "diff", "--no-color", "-U"+diffFullContext, "HEAD", "--", relPath)`; lỗi →
+   `runGit(repoRoot, "diff", "--no-color", "-U"+diffFullContext, "--cached", "--", relPath)`.
+   Cùng branch numstat dùng (`git.go:177-183`). `-U<lớn>` (lớn hơn số dòng mọi file thực tế) gộp
+   mọi hunk thành một hunk trải khắp file → toàn bộ file hiện làm context, edits tô màu tại chỗ
+   (FR1). File **không đổi** vẫn cho diff rỗng (không có context khi không có thay đổi) → fallback
+   empty-diff → full content (D10/FR6) không đổi. `--no-color` ép git xuất plain ngay cả khi
+   repo/global đặt `color.ui=always` (hoặc `color.diff=always`) — không có nó git tự nhét SGR
+   escape vào mỗi dòng `+`/`-`, khiến `diffPrefix` đọc `line[0]==0x1b` và cả diff tô mờ thay vì
+   xanh/đỏ (D11/FR1).
 2. Output rỗng (empty diff, D10/FR6) → trả sentinel "no diff" → caller fallback content.
 3. Parse + tô từng dòng theo **vị trí**, không theo prefix 3-ký-tự: preamble (`diff --git`/`index`/
    `--- a/…`/`+++ b/…`) xuất hiện **một lần** trước `@@` hunk header đầu tiên → tô `colDim`; từ
@@ -407,7 +420,7 @@ Feature: Diff view in the preview pane for a changed file
 1. File tracked sửa (text) → land vào → preview hiện **diff** (default `diffOn=true`); dòng `+`
    tô `colDiffAdd`, `-` tô `colDiffDel`, `@@`/context mờ. `v` → full content; `v` lần nữa → diff.
 2. Reconcile badge: file badge `+2 -1` → diff hiện đúng 2 dòng `+` + 1 dòng `-` (cùng base HEAD
-   D7 → số khớp). Đếm **chỉ** dòng `+`/`-`; dòng context (3 dòng mặc định, đầu dòng ` `) KHÔNG
+   D7 → số khớp). Đếm **chỉ** dòng `+`/`-`; dòng context (toàn bộ file, đầu dòng ` `) KHÔNG
    tính vào con số (FR2).
 3. Persistence: `v` về content, điều hướng sang file modified khác → vẫn content (`diffOn`
    session-sticky, D3/FR3).
@@ -487,7 +500,7 @@ Feature: Diff view in the preview pane for a changed file
 
 | File | Thay đổi |
 |------|----------|
-| `git.go` | + `diffHunks(repoRoot, relPath, width)` — HEAD-aware `git diff HEAD`/`--cached` qua `runGit`; parse unified diff; colorize self-contained ANSI theo prefix; empty→sentinel; resilient degrade |
+| `git.go` | + `diffHunks(repoRoot, relPath)` + hằng `diffFullContext` — HEAD-aware `git diff HEAD`/`--cached` qua `runGit` với `-U<lớn>` (full-file context: toàn bộ file làm context); parse unified diff; colorize self-contained ANSI theo prefix; empty→sentinel; resilient degrade |
 | `git_test.go` | + unit test `diffHunks`: colorize từng dòng (`+`/`-`/`@@`/context), HEAD vs `--cached` fallback, empty diff, lỗi→error |
 | `theme.go` | + `colDiffAdd`/`colDiffDel` (alias `colGitNew`/`colDanger`) + `diffLineStyle(prefix)` map; hunk/context dùng `dimStyle` |
 | `keys.go` | + `ToggleDiff key.Binding` (`v`, cụm Preview, help "toggle diff") |
@@ -515,6 +528,7 @@ Feature: Diff view in the preview pane for a changed file
 - Q: Toggle `v` có ghi telemetry như wrap không? → A: **Có** — `action.preview_diff_toggle`
   `{diff}` mirror `action.preview_wrap_toggle` (`model.go:710`). Đã thêm D14 + FR12 + handler
   §5.3 + checklist 11b + T5.
-- Q: Diff dùng bao nhiêu dòng context, và reconcile với badge tính dòng nào? → A: **3 dòng**
-  context mặc định của `git diff` (tô `colDim`); reconcile `+N/-N` **chỉ** đếm dòng `+`/`-`, KHÔNG
-  tính context. Đã tighten FR2 + checklist 2.
+- Q: Diff dùng bao nhiêu dòng context, và reconcile với badge tính dòng nào? → A: **full-file
+  context** (`git diff -U<lớn>`, hằng `diffFullContext`) — toàn bộ file hiện làm context (tô
+  `colDim`) để review edit trong ngữ cảnh cả file; reconcile `+N/-N` **chỉ** đếm dòng `+`/`-`,
+  KHÔNG tính context (kích thước context không ảnh hưởng con số). Đã tighten FR2 + checklist 2.

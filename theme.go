@@ -64,6 +64,18 @@ func diffLineStyle(prefix byte) lipgloss.Style {
 	}
 }
 
+// colDiffAddBg / colDiffDelBg are the WASH backgrounds behind a changed line in the
+// syntax-highlighted (code) diff (D11): a dark green tint marks an added line, a dark red
+// tint a removed line, while context lines carry no wash. The change signal is the
+// background — no leading gutter glyph — so the code starts at column 0 (no wasted space).
+// Dark enough that the bright chroma foreground (keywords, strings) stays readable on top;
+// applied per chroma token via highlightCodeBg, so it survives chroma's per-token resets
+// (a foreground-only or whole-line lipgloss background would be clobbered mid-line).
+const (
+	colDiffAddBg = "#1e5c2a" // green wash behind an added line — dark but clearly green on a near-black pane
+	colDiffDelBg = "#7d2525" // red wash behind a removed line — kept a touch louder than add (a removal is the louder event)
+)
+
 var (
 	// Cursor row in the active list.
 	cursorActiveStyle = lipgloss.NewStyle().

@@ -448,6 +448,59 @@ func (m model) previewBaseDir() string {
 	return m.cwd
 }
 
+// isIgnoredEntry reports whether entry e (shown under baseDir) is git-ignored — the
+// list/preview dimming + ordering predicate (prd-ignored-entry-dimming §5.2). It
+// resolves the SAME repo-relative key indicatorFor uses (repoRelKey), so an entry's
+// ignored-ness and its badge key can never diverge. The synthetic ".." is navigation,
+// never a real entry, so it is never ignored. Safe on a nil ignored map (git primed,
+// first refresh not yet landed) — isIgnored reads it as not-ignored.
+func (m model) isIgnoredEntry(baseDir string, e entry) bool {
+	if e.name == ".." {
+		return false
+	}
+	rel, ok := m.repoRelKey(baseDir, e.name)
+	if !ok {
+		return false
+	}
+	return m.git.isIgnored(rel)
+}
+
+// partitionIgnored returns entries reordered so every git-ignored entry sinks below
+// every non-ignored one (D5), each group KEEPING its incoming order — a stable
+// partition, so readDir's dirs-first-alpha survives within both groups and "..",
+// never ignored, stays at the top. It is a no-op (returns entries unchanged) outside a
+// git repo or when nothing is ignored, and idempotent: re-running it on an
+// already-partitioned slice yields the same order. base resolves each entry's git key
+// (m.cwd for the list pane, the previewed folder's path for the folder preview).
+func (m model) partitionIgnored(entries []entry, base string) []entry {
+	if m.git.repoRoot == "" || len(m.git.ignored) == 0 {
+		return entries
+	}
+	keep := make([]entry, 0, len(entries))
+	var sink []entry
+	for _, e := range entries {
+		if m.isIgnoredEntry(base, e) {
+			sink = append(sink, e)
+		} else {
+			keep = append(keep, e)
+		}
+	}
+	return append(keep, sink...)
+}
+
+// orderEntries sinks the list pane's ignored entries to the bottom (partitionIgnored
+// against the cwd). It is the single place the list order is adjusted, called wherever
+// m.entries is (re)built — reload, syncFromDisk — and when a git snapshot lands (the
+// ignored set can change under a live refresh). Skipped in the flat-list modes
+// (search/changes), which are ignored-free by construction (FR7/D9) and whose order is
+// fuzzy-rank / aggregate, not a directory listing.
+func (m *model) orderEntries() {
+	if m.flatListMode() {
+		return
+	}
+	m.entries = m.partitionIgnored(m.entries, m.cwd)
+}
+
 // diffApplies reports whether the selected entry's preview should be a DIFF rather
 // than its full content (prd-preview-diff-view §5.2/D6): true ONLY for a tracked
 // file whose git code is modified (M) or renamed (R) AND whose content is text
@@ -469,6 +522,23 @@ func (m model) diffApplies(sel entry, kind string) bool {
 		return false
 	}
 	return chg.code == gitModified || chg.code == gitRenamed
+}
+
+// selectedDeleted reports whether sel is a file git marks as DELETED — its content is
+// gone from the working tree. Such an entry only appears in the changes view (a deleted
+// path is in no dir listing), and reading it surfaces a raw "open …: no such file"
+// errno; refreshPreview shows a "(deleted)" placeholder instead. Mirrors diffApplies'
+// git-state resolve so both react to the same badge the user sees.
+func (m model) selectedDeleted(sel entry) bool {
+	if sel.isDir || sel.name == ".." {
+		return false
+	}
+	rel, ok := m.repoRelKey(m.previewBaseDir(), sel.name)
+	if !ok {
+		return false
+	}
+	chg, ok := m.git.changes[rel]
+	return ok && chg.code == gitDeleted
 }
 
 // diffRelPath resolves the selected entry's repo-relative key for the diffHunks
@@ -501,6 +571,7 @@ func (m *model) reload() {
 		entries = append([]entry{{name: "..", isDir: true}}, entries...)
 	}
 	m.entries = entries
+	m.orderEntries() // sink git-ignored entries below the rest (prd-ignored-entry-dimming §5.2); dirSig above is on the canonical readDir order (D8)
 	if m.cursor >= len(m.entries) {
 		m.cursor = max(0, len(m.entries)-1)
 	}
@@ -547,6 +618,7 @@ func (m *model) syncFromDisk() {
 		entries = append([]entry{{name: "..", isDir: true}}, entries...)
 	}
 	m.entries = entries
+	m.orderEntries() // re-sink ignored entries; the name-seek below then lands on the reordered list (prd-ignored-entry-dimming §5.2)
 
 	// Keep the cursor on the same name, not the same index, so a file added or
 	// removed above the selection doesn't silently re-point it at a neighbour.
@@ -700,9 +772,17 @@ func (m *model) refreshPreview() {
 			m.preview = []string{"⚠ " + err.Error()}
 			return
 		}
-		m.previewEntries = entries
+		m.previewEntries = m.partitionIgnored(entries, full) // sink ignored entries here too, so the folder preview matches the list pane (prd-ignored-entry-dimming D10)
 		m.previewIsDir = true
 		m.previewDirPath = full // base dir the git indicator resolves preview rows against
+		return
+	}
+
+	if m.selectedDeleted(sel) {
+		// A git-deleted file is gone from the working tree, so reading it would surface
+		// a raw "open …: no such file" errno (readPreviewBytes → kind "error"). It only
+		// appears in the changes view; show a clean "(deleted)" placeholder instead.
+		m.preview = []string{dimStyle.Render("(deleted)")}
 		return
 	}
 
@@ -1130,6 +1210,25 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// matched: the list is re-derived on a state APPLY, not every render.
 			if m.mode == modeChanges {
 				m.refreshChanges()
+			} else if m.mode == modeNormal {
+				// The fresh snapshot can change the ignored set (e.g. .gitignore was
+				// edited), so re-sink ignored entries — keeping the cursor on the SAME
+				// entry by NAME, since its index shifts as ignored rows move under it
+				// (prd-ignored-entry-dimming FR10). orderEntries is idempotent, so on an
+				// unchanged ignored set the order (and the cursor index) stay put.
+				var selName string
+				if m.cursor >= 0 && m.cursor < len(m.entries) {
+					selName = m.entries[m.cursor].name
+				}
+				m.orderEntries()
+				if selName != "" {
+					for i, e := range m.entries {
+						if e.name == selName {
+							m.cursor = i
+							break
+						}
+					}
+				}
 			}
 		}
 	case tea.WindowSizeMsg:
@@ -1351,24 +1450,40 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		} else {
 			overList = e.X < g.dividerStart
 		}
+		// Shift remaps a vertical wheel into a horizontal pan of the preview,
+		// mirroring the h/l keys (prd-horizontal-scroll-preview FR14). Over the
+		// list — which has no horizontal axis — Shift is ignored and the wheel
+		// stays a vertical list scroll. scrollPreviewH itself no-ops in wrap mode
+		// or on non-scrollable content, so this branch needs no extra gating.
+		shiftPan := e.Mod.Contains(tea.ModShift) && !overList
 		switch e.Button {
 		case tea.MouseWheelUp:
-			if overList {
-				if m.cursor > 0 {
-					m.cursor--
-					m.refreshPreview()
-				}
-			} else {
+			switch {
+			case shiftPan:
+				m.scrollPreviewH(-previewColStep)
+			case overList:
+				m.scrollList(-listWheelStep) // pan the list, keep the selection
+			default:
 				m.scrollPreview(-previewLineStep)
 			}
 		case tea.MouseWheelDown:
-			if overList {
-				if m.cursor < len(m.entries)-1 {
-					m.cursor++
-					m.refreshPreview()
-				}
-			} else {
+			switch {
+			case shiftPan:
+				m.scrollPreviewH(previewColStep)
+			case overList:
+				m.scrollList(listWheelStep)
+			default:
 				m.scrollPreview(previewLineStep)
+			}
+		case tea.MouseWheelLeft:
+			// Native horizontal wheel (trackpad two-finger sideways swipe). Only
+			// the preview has a horizontal axis; over the list this is a no-op.
+			if !overList {
+				m.scrollPreviewH(-previewColStep)
+			}
+		case tea.MouseWheelRight:
+			if !overList {
+				m.scrollPreviewH(previewColStep)
 			}
 		}
 		return m, nil
@@ -1450,8 +1565,25 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		if idx < 0 || idx >= len(m.entries) {
 			return m, nil
 		}
-		if idx == m.cursor && m.entries[idx].isDir {
-			m.descend() // click again on the selected folder opens it
+		if idx == m.cursor {
+			// Re-clicking the row that is already selected: a folder opens
+			// (click-to-open, the one intentional action), a file is a NO-OP.
+			// The preview is already showing this exact file, so re-running
+			// refreshPreview would only reset the scroll to the top and re-read
+			// + re-dispatch the async render for identical content — a wasted
+			// render plus a lost scroll/selection position. Mirrors moveCursor's
+			// "target == cursor → return" guard so mouse and keyboard agree.
+			if m.entries[idx].isDir {
+				m.descend()
+			} else {
+				// The click still moved focus to the list (set above), and an
+				// in-app preview selection is a focusPreview sub-state — so end
+				// it, exactly as FocusToggle does. refreshPreview used to cancel
+				// it as a side effect; the no-op path must do it explicitly. This
+				// only clears the selection flags, never the preview buffer, so
+				// the scroll/render stay put.
+				m.cancelSelection()
+			}
 		} else {
 			m.cursor = idx
 			m.refreshPreview()
@@ -1503,7 +1635,48 @@ func (m *model) moveCursor(delta int) {
 		return
 	}
 	m.cursor = target
+	m.revealCursor()
 	m.refreshPreview()
+}
+
+// listWheelStep is how many rows the list pane pans per wheel notch — 1, matching the
+// preview's previewLineStep, so both panes scroll at the same familiar granularity.
+const listWheelStep = 1
+
+// listRows is the list pane's visible row count — the SAME split handleMouse uses for
+// hit-testing (g.bodyH horizontal, g.topInner vertical), so scroll math and click math
+// agree. Derived from layout(), so it tracks the live divider ratio and window size.
+func (m model) listRows() int {
+	g := m.layout()
+	if g.vertical {
+		return g.topInner
+	}
+	return g.bodyH
+}
+
+// scrollList pans the list viewport by delta rows WITHOUT moving the cursor — a
+// wheel/touchpad scroll scrolls the file list, it does not change the selected file.
+// The cursor may scroll out of view; the next keyboard nav reveals it (revealCursor).
+func (m *model) scrollList(delta int) {
+	maxTop := max(0, len(m.entries)-m.listRows())
+	m.listTop = min(max(0, m.listTop+delta), maxTop)
+}
+
+// revealCursor slides the list scroll offset the minimum needed to bring the cursor
+// back into the visible window. Called after a cursor MOVE (keyboard nav, a by-name
+// landing) — never after a wheel scroll, which deliberately pans away from the cursor.
+// A no-op when the cursor is already visible, so it is safe to call defensively.
+func (m *model) revealCursor() {
+	h := m.listRows()
+	if h <= 0 {
+		return
+	}
+	if m.cursor < m.listTop {
+		m.listTop = m.cursor
+	} else if m.cursor >= m.listTop+h {
+		m.listTop = m.cursor - h + 1
+	}
+	m.listTop = min(max(0, m.listTop), max(0, len(m.entries)-h))
 }
 
 // scrollPreview moves the right-panel viewport by delta lines, clamped to
@@ -1577,6 +1750,7 @@ func (m *model) previewClick(y int, g geometry) {
 			break
 		}
 	}
+	m.revealCursor() // the clicked item can be deep in the entered folder's listing
 	m.refreshPreview()
 }
 
@@ -1599,11 +1773,11 @@ func (m *model) yankRelPath() {
 		return
 	}
 	rel := relRoot(m.root, m.selectedAbsPath())
-	m.tel.Record("action.yank_rel", map[string]any{"rel": rel})
 	if err := writeClipboard(rel); err != nil {
 		m.statusMsg = "⚠ clipboard: " + err.Error()
 		return
 	}
+	m.tel.Record("action.yank_rel", map[string]any{"rel": rel}) // record the yank only once it actually landed
 	m.statusMsg = "copied " + rel
 }
 
@@ -2033,6 +2207,7 @@ func (m *model) ascend() {
 			break
 		}
 	}
+	m.revealCursor() // the folder we came from can be deep in the parent listing
 	m.refreshPreview()
 	m.statusMsg = ""
 }
@@ -2053,15 +2228,9 @@ func (m model) updateSearch(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.openSearchResult()
 		return m, nil
 	case "up", "ctrl+p":
-		if m.cursor > 0 {
-			m.cursor--
-			m.refreshPreview()
-		}
+		m.moveCursor(-1) // clamps, reveals the cursor, refreshes the preview
 	case "down", "ctrl+n":
-		if m.cursor < len(m.entries)-1 {
-			m.cursor++
-			m.refreshPreview()
-		}
+		m.moveCursor(1)
 	case "backspace":
 		if m.searchQuery == "" {
 			m.exitSearchRestore() // D13: backspace on an empty query backs out
@@ -2168,6 +2337,7 @@ func (m *model) openSearchResult() {
 			break
 		}
 	}
+	m.revealCursor() // the opened file can be deep in its parent listing
 	m.refreshPreview()
 }
 

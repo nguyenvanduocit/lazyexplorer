@@ -1,8 +1,12 @@
 package main
 
 import (
+	"image"
+	"image/color"
+	"image/png"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -597,6 +601,173 @@ func TestDumpLeanStatusBarFrames(t *testing.T) {
 	mPrev.focusPane = focusPreview
 	mPrev.renderNow()
 	if err := os.WriteFile(filepath.Join(outDir, "leanbar-preview-100x24.ansi"), []byte(mPrev.View().Content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestDumpFullFileDiffFrames is the visual-verdict harness for the diff preview
+// (docs/prd-preview-diff-view.md FR1 full-file context + D11 syntax-highlight-in-diff,
+// Rev 2026-06-04): a modified file's preview shows the WHOLE file with the edits in
+// place, and — for a recognized source file — the code is SYNTAX-HIGHLIGHTED (chroma)
+// while the +/-/context diff signal rides a coloured gutter glyph. It writes one ANSI
+// frame to $LAZYEXPLORER_DUMP_DIR for freeze → PNG → agent verdict
+// (oh-my-claudecode:visual-verdict):
+//
+//	fulldiff-code-120x32 — a ~15-line Go file with one line changed deep in the
+//	                    body. The preview pane must show the ENTIRE file: the top
+//	                    `package auth`/import lines and the trailing `Logout` body as
+//	                    context AND the -old/+new edit between them. The code reads as
+//	                    SYNTAX-HIGHLIGHTED Go (keywords/strings/comment in chroma
+//	                    colours, not flat text), and the diff is legible via the
+//	                    leading gutter glyph: green '+' on the added line, red '-' on
+//	                    the removed line, dim ' ' on context. Nothing overflows width.
+//
+// Run with:
+//
+//	LAZYEXPLORER_DUMP_DIR=/tmp/le-fulldiff go test -run TestDumpFullFileDiffFrames .
+func TestDumpFullFileDiffFrames(t *testing.T) {
+	outDir := os.Getenv("LAZYEXPLORER_DUMP_DIR")
+	if outDir == "" {
+		t.Skip("set LAZYEXPLORER_DUMP_DIR to dump View() frames for visual verdict")
+	}
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	repo := t.TempDir()
+	gitExec(t, repo, "init")
+	base := "package auth\n\nimport \"errors\"\n\n// Login authenticates a user by name.\nfunc Login(name string) error {\n\tif name == \"\" {\n\t\treturn errors.New(\"empty name\")\n\t}\n\treturn nil\n}\n\nfunc Logout() {\n\t// nothing yet\n}\n"
+	mustWrite(t, repo, "auth.go", base)
+	gitExec(t, repo, "add", ".")
+	gitExec(t, repo, "commit", "-m", "init")
+	// Edit one line deep in the body so the hunk sits away from the file edges; the
+	// whole-file context keeps the package/import top and the trailing Logout visible.
+	mustWrite(t, repo, "auth.go", strings.Replace(base, `errors.New("empty name")`, `errors.New("name is required")`, 1))
+
+	m := modelAt(t, repo, 120, 32)
+	m.renderStyle = "dark"
+	m.diffOn = true // ship default (D3); modelAt struct-constructs the zero-value false
+	if m.git.repoRoot == "" {
+		m.git.repoRoot = detectRepoRoot(m.root)
+		m.gitRootPrefix = repoRelPrefix(m.git.repoRoot, m.root)
+	}
+	state, _ := collectGitState(m.git.repoRoot, nil)
+	var tm tea.Model = m
+	tm, _ = tm.Update(gitRefreshedMsg{gen: m.gitGen, state: state})
+	m = tm.(model)
+
+	for i, e := range m.entries {
+		if e.name == "auth.go" {
+			m.cursor = i
+		}
+	}
+	m.refreshPreview()
+	m.renderNow()
+	if err := os.WriteFile(filepath.Join(outDir, "fulldiff-code-120x32.ansi"), []byte(m.View().Content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestDumpListScrollFrame is the visual-verdict harness for the independent list scroll
+// offset (wheel-pans-list-not-cursor pain). A wheel/touchpad scroll pans the list
+// viewport WITHOUT moving the selection, so the cursor can sit OFF-SCREEN — a state the
+// old cursor-derived window could never produce. It writes one ANSI frame to
+// $LAZYEXPLORER_DUMP_DIR for freeze → PNG → agent verdict:
+//
+//	listscroll-90x24 — a 30-entry folder scrolled down so the list shows a MID window
+//	                    (entries ~12..) with the selection (entry 0) scrolled above the
+//	                    top. The list must render the shifted rows cleanly with NO
+//	                    highlighted cursor row visible (the selection is off-screen),
+//	                    no blank gaps, and the preview still showing the SELECTED file
+//	                    (entry 0) — proof the scroll moved the view, not the selection.
+//
+// Run with:
+//
+//	LAZYEXPLORER_DUMP_DIR=/tmp/le-listscroll go test -run TestDumpListScrollFrame .
+func TestDumpListScrollFrame(t *testing.T) {
+	outDir := os.Getenv("LAZYEXPLORER_DUMP_DIR")
+	if outDir == "" {
+		t.Skip("set LAZYEXPLORER_DUMP_DIR to dump View() frames for visual verdict")
+	}
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	for i := range 30 {
+		name := "file" + string(rune('a'+i%26)) + strconv.Itoa(i) + ".txt"
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("contents of "+name+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	m := modelAt(t, dir, 90, 24)
+	m.renderStyle = "dark"
+	m.cursor = 0       // selection stays on the first entry
+	m.scrollList(12)   // pan the list down — the cursor scrolls above the top
+	m.refreshPreview() // preview follows the SELECTION (entry 0), not the scroll
+	m.renderNow()
+	if err := os.WriteFile(filepath.Join(outDir, "listscroll-90x24.ansi"), []byte(m.View().Content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestDumpImageFrame is the visual-verdict harness for inline image rendering
+// (docs/prd-inline-image-view.md): the preview pane DRAWS a raster image as half-block
+// ANSI. Fixture is a 64×64 PNG of four colour quadrants (TL red, TR green, BL blue, BR
+// yellow) — a recognizable, aspect-checkable target. The preview must show four crisp
+// colour blocks in the correct 2×2 arrangement, scaled to the pane, no metadata line.
+//
+// Run with:
+//
+//	LAZYEXPLORER_DUMP_DIR=/tmp/le-image go test -run TestDumpImageFrame .
+func TestDumpImageFrame(t *testing.T) {
+	outDir := os.Getenv("LAZYEXPLORER_DUMP_DIR")
+	if outDir == "" {
+		t.Skip("set LAZYEXPLORER_DUMP_DIR to dump View() frames for visual verdict")
+	}
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	img := image.NewRGBA(image.Rect(0, 0, 64, 64))
+	for y := 0; y < 64; y++ {
+		for x := 0; x < 64; x++ {
+			var c color.RGBA
+			switch {
+			case x < 32 && y < 32:
+				c = color.RGBA{R: 220, A: 255} // TL red
+			case x >= 32 && y < 32:
+				c = color.RGBA{G: 200, A: 255} // TR green
+			case x < 32 && y >= 32:
+				c = color.RGBA{B: 230, A: 255} // BL blue
+			default:
+				c = color.RGBA{R: 220, G: 200, A: 255} // BR yellow
+			}
+			img.Set(x, y, c)
+		}
+	}
+	f, err := os.Create(filepath.Join(dir, "quad.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := png.Encode(f, img); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	m := modelAt(t, dir, 90, 30)
+	m.renderStyle = "dark"
+	for i, e := range m.entries {
+		if e.name == "quad.png" {
+			m.cursor = i
+		}
+	}
+	m.refreshPreview()
+	m.pendingWidth = 0
+	m.renderNow()
+	if err := os.WriteFile(filepath.Join(outDir, "image-quad-90x30.ansi"), []byte(m.View().Content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }

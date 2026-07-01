@@ -8,7 +8,7 @@ Status: **accepted** · Author: opus 4.8 session · Ngày: 2026-05-30 · Shipped
 
 lazyexplorer sống *cạnh* một coding agent (xem `CLAUDE.md` §"Goal & Positioning"): user liếc cây
 dự án, thấy file agent vừa sửa, rồi muốn **mở chính file đó để xem/sửa tay**. Hôm nay đường duy
-nhất là: copy path (`copy path`, `commands.go:46`) → nhảy sang pane khác → gõ `$EDITOR <path>`.
+nhất là: copy path (`copy absolute path`, `commands.go:71`) → nhảy sang pane khác → gõ `$EDITOR <path>`.
 Một dogfood test đã đo và ghi nhận đúng friction này: `zz_dogfood_test.go:395-424` (T6) drive thử
 palette + phím `o`/`e` và kết luận *"no open-in-$EDITOR … the palette offers only
 reload/copy-path/cd/quit"*.
@@ -44,7 +44,7 @@ Nhấn `e` (hoặc chạy palette command "open in editor") để mở file đan
 | D6 | Guard chọn entry | `focusList` + listing non-empty + không `..` + không dir | Mirror Rename/Delete (`model.go:1532-1542`). `..` và dir không có gì để "edit"; `selectedAbsPath()` trên `..` trả về dir cha → phải chặn ở cả hai entry point |
 | D7 | Resume on success | Snapshot tên file đang chọn → `m.reload()` → re-seek tên đó → `refreshPreview()` → `reconcilePreview(nil)` | Snappier hơn chờ poll 1s; reload kéo cả file mới editor tạo + preview re-render bản đã lưu. Giữ selection theo TÊN (không phải index) để file editor tạo sort ABOVE file vừa sửa không re-point cursor/preview sang neighbour — gương `ascend()` (`model.go:1642`) và poll path `syncFromDisk` (`model.go:513-526`). Clamp index của `reload()` là fallback khi tên biến mất (editor rename file giữa chừng) |
 | D8 | Resume on error | `statusMsg = "⚠ editor: …"`, listing không đụng | Editor crash/lỗi spawn là best-effort fail — báo, không phá state |
-| D9 | Palette twin | Command "open in editor" (`commands.go defaultCommands`), cùng guard | Phím trực tiếp là primary; palette entry trợ discoverability như `copy path`. Guard riêng vì là entry point thứ hai |
+| D9 | Palette twin | Command "open in editor" (`commands.go defaultCommands`), cùng guard | Phím trực tiếp là primary; palette entry trợ discoverability như `copy absolute path`. Guard riêng vì là entry point thứ hai |
 | D10 | Telemetry | `m.tel.Record("action.open_editor", {name})` trước khi exec | Đo adoption; không log path (xem invariant telemetry các PRD trước) |
 
 ## 4. Functional requirements

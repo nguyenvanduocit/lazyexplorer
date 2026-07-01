@@ -337,6 +337,101 @@ func TestCollectGitStateNoCommitRepo(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// parseIgnored / isIgnored — the gitignore set (prd-ignored-entry-dimming §5.1)
+// ---------------------------------------------------------------------------
+
+// TestParseIgnored pins D1: `git status --porcelain -z --ignored` (no -uall) emits a
+// "!! path" record per ignored entry — a directory COLLAPSES to "!! dir/" (trailing
+// slash), a file is bare. parseIgnored strips the slash and stores the repo-relative
+// slash key, skipping the regular change records (" M …") the same stream also carries.
+func TestParseIgnored(t *testing.T) {
+	data := []byte("!! .claude/\x00!! tmp/\x00 M foo.go\x00!! lazyexplorer\x00!! docs/.omc/\x00")
+	ignored := map[string]bool{}
+	parseIgnored(data, ignored)
+
+	for _, want := range []string{".claude", "tmp", "lazyexplorer", "docs/.omc"} {
+		if !ignored[want] {
+			t.Errorf("parseIgnored should record %q (slash stripped); got %v", want, ignored)
+		}
+	}
+	if ignored["foo.go"] {
+		t.Errorf("a non-!! change record must not be recorded as ignored; got %v", ignored)
+	}
+	if ignored[".claude/"] || ignored["tmp/"] {
+		t.Errorf("the trailing slash on a dir record must be stripped; got %v", ignored)
+	}
+}
+
+// TestGitStateIsIgnored pins D7 ancestor-match: a path is ignored when it OR any
+// ancestor directory is in the set (the collapsed "!! tmp/" means "tmp and everything
+// under it"). A prefix that is not a path boundary ("tmpfoo" vs "tmp") must NOT match,
+// and a nil set (git primed, no refresh yet) is safe.
+func TestGitStateIsIgnored(t *testing.T) {
+	st := gitState{ignored: map[string]bool{"tmp": true, "docs/.omc": true, "lazyexplorer": true}}
+	cases := []struct {
+		rel  string
+		want bool
+	}{
+		{"tmp", true},                  // self
+		{"tmp/a", true},                // ancestor
+		{"tmp/a/b/c.go", true},         // deep ancestor
+		{"docs/.omc", true},            // nested self
+		{"docs/.omc/state.json", true}, // nested ancestor
+		{"lazyexplorer", true},         // ignored file at root
+		{"src", false},
+		{"src/main.go", false},
+		{"docs", false},   // parent of an ignored dir is NOT itself ignored
+		{"tmpfoo", false}, // prefix that is not a path boundary must not match
+	}
+	for _, c := range cases {
+		if got := st.isIgnored(c.rel); got != c.want {
+			t.Errorf("isIgnored(%q) = %v, want %v", c.rel, got, c.want)
+		}
+	}
+	if (gitState{}).isIgnored("anything") {
+		t.Errorf("a nil ignored set must report nothing ignored")
+	}
+}
+
+// TestCollectGitStateIgnoredCollapsesDirAndSkipsTracked drives the ignored collection
+// against a real repo, pinning the two load-bearing behaviors: an ignored DIR is
+// recorded as one collapsed key (not expanded to its files — D1), and a TRACKED file
+// that matches an ignore pattern is NOT reported ignored (git does not ignore tracked
+// things — D2, the reason we use `git status` over a pure pattern-matcher).
+func TestCollectGitStateIgnoredCollapsesDirAndSkipsTracked(t *testing.T) {
+	dir := t.TempDir()
+	gitExec(t, dir, "init")
+	mustWrite(t, dir, ".gitignore", "ignored/\n*.log\n")
+	if err := os.MkdirAll(filepath.Join(dir, "ignored"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(dir, "ignored"), "junk.txt", "x\n")
+	mustWrite(t, dir, "skip.log", "noise\n")       // untracked + matches *.log → ignored
+	mustWrite(t, dir, "keep.log", "tracked\n")     // matches *.log BUT tracked → NOT ignored
+	gitExec(t, dir, "add", "-f", "keep.log")       // force-add past the ignore pattern
+	mustWrite(t, dir, "main.go", "package main\n") // normal untracked
+
+	root := detectRepoRoot(dir)
+	st, _ := collectGitState(root, nil)
+
+	if !st.ignored["ignored"] {
+		t.Errorf("ignored dir should be the collapsed key %q; got %v", "ignored", st.ignored)
+	}
+	if st.ignored["ignored/junk.txt"] {
+		t.Errorf("ignored dir must NOT expand to its files (no -uall); got %v", st.ignored)
+	}
+	if !st.ignored["skip.log"] {
+		t.Errorf("untracked ignored file skip.log should be recorded; got %v", st.ignored)
+	}
+	if st.ignored["keep.log"] {
+		t.Errorf("a TRACKED file must never be reported ignored (D2); got %v", st.ignored)
+	}
+	if st.ignored["main.go"] {
+		t.Errorf("a normal file must not be ignored; got %v", st.ignored)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // diffHunks — fetch + colorize the unified diff (prd-preview-diff-view T1/§5.1)
 // ---------------------------------------------------------------------------
 
@@ -425,6 +520,158 @@ func TestDiffHunksColorizesByPrefix(t *testing.T) {
 	if !sawAdd || !sawDel || !sawHunk || !sawContext {
 		t.Errorf("diff must show an add, a del, a hunk header, and a context line; got add=%v del=%v hunk=%v context=%v",
 			sawAdd, sawDel, sawHunk, sawContext)
+	}
+}
+
+// TestDiffHunksSyntaxHighlightsWithFileContext pins the highlight-in-diff contract
+// (syntax-highlight-in-diff pain): when the changed file is source code, each diff
+// body line carries chroma SYNTAX highlighting on its code, with the +/-/space diff
+// signal moved onto a coloured gutter glyph — not the flat whole-line foreground the
+// non-code path uses. The fixture is the DISCRIMINATING case the advisor named: an
+// added line that lives INSIDE a multi-line block comment. A per-line tokenizer would
+// see "docline two" with no open '/*' and colour it as plain code; only tokenizing the
+// reconstructed WHOLE new file (which -U<big> gives us) sees it as a comment. We assert
+// the added line equals the green gutter glyph followed by EXACTLY the line chroma
+// produces for that index of the whole new file — so the diff highlights identically to
+// the full-content (`v`) view. The leading "+docline two" plain text is preserved
+// (Y/V copy reads ansi.Strip of these lines), so copy stays byte-correct.
+func TestDiffHunksSyntaxHighlightsWithFileContext(t *testing.T) {
+	dir := t.TempDir()
+	gitExec(t, dir, "init")
+	const oldContent = "package p\n\n/*\ndocline one\n*/\nfunc f() {}\n"
+	const newContent = "package p\n\n/*\ndocline one\ndocline two\n*/\nfunc f() {}\n"
+	mustWrite(t, dir, "f.go", oldContent)
+	gitExec(t, dir, "add", "f.go")
+	gitExec(t, dir, "commit", "-m", "init")
+	mustWrite(t, dir, "f.go", newContent)
+
+	root := detectRepoRoot(dir)
+	lines, preStyled, err := diffHunks(root, "f.go")
+	if err != nil {
+		t.Fatalf("diffHunks on a modified .go file should succeed; err=%v", err)
+	}
+	if !preStyled {
+		t.Errorf("highlighted diff lines carry verbatim ANSI → preStyled must be true")
+	}
+
+	// The context-aware truth: highlight the whole NEW file WITH the added-line green wash;
+	// "docline two" is at index 4. An added line is exactly this — no gutter glyph, the
+	// wash IS the signal so code starts at column 0.
+	const addedIdx = 4
+	wantHL, herr := highlightCodeBg(newContent, "f.go", colDiffAddBg)
+	if herr != nil {
+		t.Fatalf("highlightCodeBg(newContent) err=%v", herr)
+	}
+	if addedIdx >= len(wantHL) {
+		t.Fatalf("fixture drift: new file has %d highlighted lines, want index %d", len(wantHL), addedIdx)
+	}
+	wantAdded := wantHL[addedIdx]
+
+	// Sanity: the tinted comment-aware highlight must differ from the UNTINTED highlight —
+	// proving both the green wash AND the whole-file (comment) context are applied (a
+	// per-line tokenizer would colour "docline two" as plain code, and no-wash would drop
+	// the background).
+	plainHL, _ := highlightCode(newContent, "f.go")
+	if wantAdded == plainHL[addedIdx] {
+		t.Fatal("fixture not discriminating: tinted added line equals the untinted highlight")
+	}
+
+	// No gutter → ansi.Strip is just the bare code ("docline two"); the Y/V copy buffer
+	// reads from this, so a copied diff is plain source lines.
+	var gotAdded string
+	for _, ln := range lines {
+		if ansi.Strip(ln) == "docline two" {
+			gotAdded = ln
+			break
+		}
+	}
+	if gotAdded == "" {
+		t.Fatal("diff did not include the added comment line 'docline two'")
+	}
+	if gotAdded != wantAdded {
+		t.Errorf("added line not highlighted+washed with whole-file context:\n got %q\nwant %q", gotAdded, wantAdded)
+	}
+}
+
+// TestDiffShowsFullFileContext pins the core promise of the diff preview: the
+// WHOLE file is shown — every unchanged line as dim context — with the change
+// coloured in place, NOT just the few lines around each hunk. The fixture is
+// discriminating: a 15-line file with a single edit at line 8. Git's default
+// 3-line context would truncate the diff to lines ~5–11, dropping l1/l2/l15;
+// full-file context keeps them. We assert the far-away unchanged lines survive
+// as context (` l1`, ` l15`) alongside the `-l8`/`+CHANGED` edit, so a reviewer
+// reads the change without losing the rest of the file.
+func TestDiffShowsFullFileContext(t *testing.T) {
+	dir := t.TempDir()
+	gitExec(t, dir, "init")
+	mustWrite(t, dir, "f.txt", "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nl10\nl11\nl12\nl13\nl14\nl15\n")
+	gitExec(t, dir, "add", "f.txt")
+	gitExec(t, dir, "commit", "-m", "init")
+	// Edit a single line deep in the middle; default-context hunks would omit the
+	// first and last lines, full-file context keeps them.
+	mustWrite(t, dir, "f.txt", "l1\nl2\nl3\nl4\nl5\nl6\nl7\nCHANGED\nl9\nl10\nl11\nl12\nl13\nl14\nl15\n")
+
+	root := detectRepoRoot(dir)
+	lines, _, err := diffHunks(root, "f.txt")
+	if err != nil {
+		t.Fatalf("diffHunks err=%v", err)
+	}
+
+	// The edit itself.
+	if findDiffBodyLine(lines, "-l8") == "" || findDiffBodyLine(lines, "+CHANGED") == "" {
+		t.Fatalf("diff must show the edit (-l8 +CHANGED); got:\n%s", ansi.Strip(strings.Join(lines, "\n")))
+	}
+	// The far-away unchanged lines must be present as context — proof the whole
+	// file is shown, not a truncated hunk window.
+	for _, want := range []string{" l1", " l2", " l15"} {
+		if findDiffBodyLine(lines, want) == "" {
+			t.Errorf("full-file diff must keep distant context line %q; got:\n%s",
+				want, ansi.Strip(strings.Join(lines, "\n")))
+		}
+	}
+}
+
+// TestDiffHunksExpandsTabs pins that the diff preview expands tabs to spaces like
+// every other preview path (normalizeText). A tab-indented source file's diff must
+// NOT carry a raw '\t': an unexpanded tab measures as ~0 columns in lipgloss/ansi
+// width while the terminal jumps a whole tab stop, so the indentation would desync
+// from the plain code preview (and the horizontal-scroll clamp would mis-size the
+// line). Diff lines are also what `Y`/`V` copy out, so the buffer itself must be
+// tab-free, not just the rendered frame.
+func TestDiffHunksExpandsTabs(t *testing.T) {
+	dir := t.TempDir()
+	gitExec(t, dir, "init")
+	mustWrite(t, dir, "f.go", "package p\nfunc f() {\n\tx := 1\n}\n")
+	gitExec(t, dir, "add", "f.go")
+	gitExec(t, dir, "commit", "-m", "init")
+	// Edit the tab-indented body line so the diff carries a '+' and a '-' line that
+	// each begin (after the diff gutter char) with a single source tab.
+	mustWrite(t, dir, "f.go", "package p\nfunc f() {\n\tx := 2\n}\n")
+
+	root := detectRepoRoot(dir)
+	lines, _, err := diffHunks(root, "f.go")
+	if err != nil {
+		t.Fatalf("diffHunks err=%v", err)
+	}
+	sawAdded := false
+	for _, ln := range lines {
+		plain := ansi.Strip(ln)
+		if strings.ContainsRune(plain, '\t') {
+			t.Errorf("diff line still carries a raw tab: %q", plain)
+		}
+		if strings.Contains(plain, "x := 2") {
+			sawAdded = true
+			// f.go is code → no gutter glyph (the green wash is the signal), so the line is
+			// just the tab expanded to previewTabWidth spaces + the content, starting at
+			// column 0 — exactly normalizeText's mapping (the wash never reintroduces a tab).
+			want := strings.Repeat(" ", previewTabWidth) + "x := 2"
+			if plain != want {
+				t.Errorf("added line not tab-expanded:\n got %q\nwant %q", plain, want)
+			}
+		}
+	}
+	if !sawAdded {
+		t.Fatal("diff did not include the changed tab-indented line")
 	}
 }
 

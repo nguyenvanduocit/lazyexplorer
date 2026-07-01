@@ -113,7 +113,8 @@ và soft-wrap (xuống dòng, không mất nội dung).
   flush-left v1.
 - KHÔNG `linebreak` (wrap tại word boundary) — v1 hard-wrap tại col; word-aware
   wrap defer.
-- KHÔNG horizontal scroll bằng mouse (drag/shift-wheel) — keyboard-only v1.
+- KHÔNG **drag-pan** ngang bằng mouse (click-giữ-kéo) — defer. Shift+wheel và
+  native horizontal wheel có, xem FR14.
 - KHÔNG `$` (scroll-to-end-of-longest-line) — `L` repeat tới được; defer phím riêng.
 
 ## 3. Quyết định đã chốt
@@ -212,8 +213,16 @@ và soft-wrap (xuống dòng, không mất nội dung).
   `action.preview_wrap_toggle` với `{wrap: bool}` mỗi lần `w`. Non-blocking
   (`model.go:240` pattern).
 
-- **FR14** — Mouse: hscroll KHÔNG bind mouse v1; wheel vẫn vertical scroll
-  (`model.go:563-597` giữ nguyên). Shift+wheel / drag-pan defer.
+- **FR14** — Mouse hscroll (ĐÃ VERIFY ✅ 2026-07-01): trong preview pane, `Shift`+wheel
+  đứng (vertical wheel + `tea.ModShift`) và native horizontal wheel
+  (`tea.MouseWheelLeft`/`MouseWheelRight` — trackpad vuốt ngang) pan preview ngang
+  ±`previewColStep` qua `scrollPreviewH` (`model.go:1458`, case `tea.MouseWheelMsg`).
+  Trên list pane `Shift` bị bỏ qua (list không có trục ngang) → wheel vẫn vertical
+  `scrollList`; native h-wheel = no-op. `scrollPreviewH` tự no-op ở wrap mode /
+  non-scrollable nên nhánh không cần gating thêm. Drag-pan defer (xem §5 defer list).
+  Giới hạn: một số terminal (Terminal.app, vài cấu hình iTerm2/tmux) tự giữ
+  `Shift`+wheel cho scrollback → gesture không tới app; keyboard `h`/`l` và native
+  h-wheel không bị ảnh hưởng.
 
 - **FR15** — hscroll keys + `w` khi `focusPane == focusList`: **no-op** (preview
   state không đổi). Đối xứng pane-focus FR5 (preview keys chỉ act ở preview focus).
@@ -802,9 +811,9 @@ riêng cho `h`/`l`** (Go chỉ chạy case trúng đầu tiên → case thứ ha
 
 - **`sidescrolloff` đệm**: không cursor → không đệm. N/A.
 
-- **Mouse horizontal pan** (shift+wheel / drag):
-  bubbletea v2 có wheel + motion msg nhưng horizontal wheel hiếm + dễ flap.
-  Keyboard-only v1. Defer.
+- **Mouse drag-pan ngang** (click-giữ-kéo preview):
+  motion msg có sẵn nhưng drag ngang dễ xung đột với drag-to-select dọc + dễ flap.
+  Defer. (Shift+wheel và native horizontal wheel đã ship — FR14.)
 
 - **Per-line indicator (thay global reserve D9)**:
   Per-line `›` chỉ ở dòng bị cắt làm content width nhảy giữa các dòng → code
@@ -904,6 +913,24 @@ Feature: Horizontal scroll & wrap toggle for the preview pane
     When I press l
     Then the preview horizontal offset stays zero
 
+  Scenario: Shift and the mouse wheel pan the preview horizontally
+    Given the previewed file has long lines
+    When I hold Shift and scroll the wheel down over the preview
+    Then the preview pans toward the right
+    When I hold Shift and scroll the wheel up over the preview
+    Then the preview pans back toward the start
+
+  Scenario: A sideways wheel pans the preview horizontally
+    Given the previewed file has long lines
+    When I scroll the wheel sideways over the preview
+    Then the preview pans horizontally in that direction
+
+  Scenario: Shift and the wheel over the list keep scrolling it vertically
+    Given the list has more entries than fit
+    When I hold Shift and scroll the wheel down over the list
+    Then the list scrolls down
+    And the preview horizontal offset stays zero
+
   Scenario: Resizing reflows wrapped lines and re-clamps the offset
     Given the preview is in wrap mode
     When the terminal width changes
@@ -939,18 +966,23 @@ Feature: Horizontal scroll & wrap toggle for the preview pane
 14. Status hint khi focus preview + code nowrap → hiện `[h/l] scroll [H/L]
     half [0] reset [w] wrap`; wrap on → chỉ `[w] nowrap`; markdown/folder →
     không có hscroll/wrap hint (FR12).
-15. `rg 'previewHScroll' model.go view.go` → có hit; `rg 'reflowPreview'` →
+15. Mở file code dòng dài, focus preview → `Shift`+lăn chuột xuống (con trỏ trên
+    preview) pan phải, `‹` hiện; `Shift`+lăn lên pan trái về 0. Trackpad vuốt ngang
+    (native horizontal wheel) pan tương ứng không cần `Shift`. `Shift`+lăn trên
+    list pane → list vẫn vertical scroll, `previewHScroll` = 0 (FR14). Lưu ý terminal
+    có thể tự giữ `Shift`+wheel cho scrollback (giới hạn ở FR14).
+16. `rg 'previewHScroll' model.go view.go` → có hit; `rg 'reflowPreview'` →
     định nghĩa + call sites (applyPreview, refreshPreview plain path, w toggle,
     resize, renderPreview guard).
-16. `go build -o lazyexplorer . && go vet ./... && go test ./...` xanh.
-17. `go test -race ./...` xanh (reflow trên Update goroutine; không có goroutine
+17. `go build -o lazyexplorer . && go vet ./... && go test ./...` xanh.
+18. `go test -race ./...` xanh (reflow trên Update goroutine; không có goroutine
     mới — race surface thấp nhưng confirm).
-18. Visual verdict (`oh-my-claudecode:visual-verdict`) cho 4 frame:
+19. Visual verdict (`oh-my-claudecode:visual-verdict`) cho 4 frame:
     - Frame A: code nowrap offset 0 — `›` mép phải, không `‹`.
     - Frame B: code nowrap panned — `‹` mép trái + `›` mép phải, màu đúng.
     - Frame C: code wrap on — dòng wrap, không indicator, alignment đẹp.
     - Frame D: markdown focus preview — không indicator (FR7 regression guard).
-19. `gitnexus_impact({target: "renderPreview", direction: "upstream"})` +
+20. `gitnexus_impact({target: "renderPreview", direction: "upstream"})` +
     `gitnexus_impact({target: "previewLen"})` trước sửa; `gitnexus_detect_changes`
     sau, scope khớp §8.
 
@@ -1070,12 +1102,13 @@ Feature: Horizontal scroll & wrap toggle for the preview pane
 
 | File | Thay đổi |
 |------|----------|
-| `model.go` | + field `previewHScroll`, `previewWrap`, `previewDisplay`, `previewDisplayW`, `previewDisplayWrap`, `previewMaxLineWidth`, `previewSrcStart`; + const `previewColStep`; + `reflowPreview(w)` (dựng `previewSrcStart` mapping), `sourceLineAt`/`visualLineFor`, `scrollPreviewH(delta)`, `toggleWrap()` (M4 position-preserve); `refreshPreview` reset hygiene (`previewHScroll`/`previewDisplay`/`previewSrcStart`/`previewMaxLineWidth`); `applyPreview` + plain path + WindowSizeMsg gọi `reflowPreview`; `updateNormal`: **mở rộng nhánh `else`(focusPreview) của case `GoUp`/`OpenEntry`** cho `h`/`l` (B1, KHÔNG case riêng) + case mới `H`/`L`/`0`/`w` + telemetry |
+| `model.go` | + field `previewHScroll`, `previewWrap`, `previewDisplay`, `previewDisplayW`, `previewDisplayWrap`, `previewMaxLineWidth`, `previewSrcStart`; + const `previewColStep`; + `reflowPreview(w)` (dựng `previewSrcStart` mapping), `sourceLineAt`/`visualLineFor`, `scrollPreviewH(delta)`, `toggleWrap()` (M4 position-preserve); `refreshPreview` reset hygiene (`previewHScroll`/`previewDisplay`/`previewSrcStart`/`previewMaxLineWidth`); `applyPreview` + plain path + WindowSizeMsg gọi `reflowPreview`; `updateNormal`: **mở rộng nhánh `else`(focusPreview) của case `GoUp`/`OpenEntry`** cho `h`/`l` (B1, KHÔNG case riêng) + case mới `H`/`L`/`0`/`w` + telemetry; `handleMouse` case `tea.MouseWheelMsg`: Shift+wheel đứng + native `MouseWheelLeft/Right` → `scrollPreviewH` (FR14) |
 | `view.go` | `renderPreview` reflow guard + wrap/markdown verbatim + nowrap `renderHWindow`; + `renderHWindow`, `hSlice`, `runePrefixWidth`; `previewLen` đọc `previewDisplay` |
 | `fs.go` | + `wrapLine(line, w)`, `lineWidth(line)`, `hasANSI(s)` (ANSI/rune-aware helpers cạnh `fitWidth`/`ansi` usage) |
 | `keys.go` | + 6 binding (`PreviewScrollLeft/Right`, `PreviewHScrollHalfLeft/Right`, `PreviewHScrollReset`, `PreviewToggleWrap`) — cross-ref keymap PRD §5.6 |
 | `ansi_contract_test.go` *(mới)* | T1 API verify (`ansi.Hardwrap`/`TruncateLeft`/`StringWidth`) |
 | `hscroll_test.go` *(mới)* | reflow, hSlice, clamp, key routing, wrap toggle, indicators, resize (T9) |
+| `hwheel_test.go` *(mới)* | FR14 mouse hscroll: Shift+wheel + native `MouseWheelLeft/Right` → `scrollPreviewH`; over-list ignore, wrap no-op, vertical-layout routing, plain-wheel regression guard |
 | `zz_dump_test.go` | + 4 frame fixture cho visual verdict (T10) |
 | `docs/prd-horizontal-scroll-preview.md` | File này |
 | `docs/prd-keymap-and-command-palette.md` · `docs/prd-pane-focus.md` · `docs/prd-smooth-preview-scroll.md` | Cross-ref note (T11); no code-spec change |

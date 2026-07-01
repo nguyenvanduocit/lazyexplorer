@@ -158,7 +158,7 @@ func TestModalNoOverflow(t *testing.T) {
 // TestPaletteModalNoWrap guards the width contract between modalSize (returns
 // the inner text width) and renderModal. lipgloss v2 .Width is the TOTAL outer
 // width — frame included — so renderModal must pass outer (inner+frame), else
-// the text area is short by the frame and the longest description ("copy path")
+// the text area is short by the frame and the longest command row ("copy absolute path")
 // wraps, inflating the box by a row. At a width where every row fits, the box
 // height is exactly border(2) + header(3: title/input/blank) + one row/command.
 func TestPaletteModalNoWrap(t *testing.T) {

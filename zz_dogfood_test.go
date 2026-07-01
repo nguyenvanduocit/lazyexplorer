@@ -324,13 +324,13 @@ func t1FindChangedFile(t *testing.T) {
 		m.renderNow()
 		body := strings.Join(m.preview, "\n")
 		previewed = strings.Contains(body, "func Login")
-		// /goal PROOF (prd-preview-diff-view §6.14): the preview shows the DIFF HUNK
-		// "+func Login() {}" — the added line marked, not just the full file body. This
-		// is review-the-edit-in-pane finally achieved: the user reads WHAT changed
-		// without tab-ing away to `git diff`. The leading "+" distinguishes a diff hunk
-		// from plain content (which the pre-diff harness could only show).
+		// /goal PROOF (prd-preview-diff-view §6.14): the preview is the DIFF of the file
+		// (previewIsDiff) showing the changed func Login — the added line carries a green
+		// background wash (no gutter glyph; the wash IS the diff signal). This is
+		// review-the-edit-in-pane: the user reads WHAT changed without tab-ing away to
+		// `git diff`. previewIsDiff is the authoritative diff-vs-content state.
 		plain := ansi.Strip(body)
-		diffHunksShown = m.previewIsDiff && strings.Contains(plain, "+func Login")
+		diffHunksShown = m.previewIsDiff && strings.Contains(plain, "func Login")
 	}
 
 	t.Logf("[T1 find-changed-file] achievable=%v keystrokes=%d diff_now_achievable=%v", reached && previewed, keys, diffHunksShown)

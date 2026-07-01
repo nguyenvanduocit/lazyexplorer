@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"charm.land/lipgloss/v2"
 )
 
 func TestIsImage(t *testing.T) {
@@ -38,35 +40,80 @@ func writePNG(t *testing.T, path string, w, h int) {
 	}
 }
 
-// TestRenderImagePreviewMetadata proves the scaffold renderer reads real header
-// metadata (format + dimensions) and returns it as a plain placeholder line —
-// the binary-renderer path, distinct from the text renderers.
-func TestRenderImagePreviewMetadata(t *testing.T) {
+// TestImageToHalfBlocks pins the half-block contract (prd-inline-image-view D1): each
+// cell is a `▀` with foreground = upper pixel, background = lower pixel, so a 2×2 image
+// at 2 cols is ONE cell row of two cells carrying the four pixels exactly.
+func TestImageToHalfBlocks(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	img.Set(0, 0, color.RGBA{R: 255, A: 255})         // top-left  red
+	img.Set(1, 0, color.RGBA{G: 255, A: 255})         // top-right green
+	img.Set(0, 1, color.RGBA{B: 255, A: 255})         // bot-left  blue
+	img.Set(1, 1, color.RGBA{R: 255, G: 255, A: 255}) // bot-right yellow
+
+	lines := imageToHalfBlocks(img, 2)
+	if len(lines) != 1 {
+		t.Fatalf("a 2×2 image at 2 cols is one cell row; got %d rows", len(lines))
+	}
+	want := lipgloss.NewStyle().Foreground(lipgloss.Color("#ff0000")).Background(lipgloss.Color("#0000ff")).Render("▀") +
+		lipgloss.NewStyle().Foreground(lipgloss.Color("#00ff00")).Background(lipgloss.Color("#ffff00")).Render("▀")
+	if lines[0] != want {
+		t.Errorf("half-block row mismatch:\n got %q\nwant %q", lines[0], want)
+	}
+
+	// A portrait image yields more cell rows than it is wide (it scrolls vertically): an
+	// 4×8 image at 4 cols → 8 px tall → 4 cell rows.
+	tall := image.NewRGBA(image.Rect(0, 0, 4, 8))
+	if n := len(imageToHalfBlocks(tall, 4)); n != 4 {
+		t.Errorf("4×8 image at 4 cols → 4 cell rows; got %d", n)
+	}
+}
+
+// TestRenderImagePreviewDraws proves the renderer DRAWS a decodable image as half-block
+// ANSI (pre-styled), not a metadata placeholder: a 32×18 PNG at 80 cols renders as
+// multiple `▀` rows scaled to its natural width.
+func TestRenderImagePreviewDraws(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "pic.png")
 	writePNG(t, p, 32, 18)
 
 	lines, preStyled, err := renderImagePreview(p, nil, 80, "")
 	if err != nil {
-		t.Fatalf("scaffold renderer must not error: %v", err)
+		t.Fatalf("image renderer must not error: %v", err)
 	}
-	if preStyled {
-		t.Error("image placeholder is plain text → preStyled must be false (so fitWidth still applies)")
+	if !preStyled {
+		t.Error("a drawn image is verbatim ANSI → preStyled must be true")
 	}
-	if len(lines) != 1 {
-		t.Fatalf("want a single placeholder line, got %d: %q", len(lines), lines)
+	if len(lines) < 2 {
+		t.Fatalf("a 32×18 image should draw multiple half-block rows, got %d", len(lines))
 	}
-	if !strings.Contains(lines[0], "32×18") {
-		t.Errorf("metadata line missing dimensions: %q", lines[0])
-	}
-	if !strings.Contains(strings.ToUpper(lines[0]), "PNG") {
-		t.Errorf("metadata line missing format: %q", lines[0])
+	if !strings.Contains(strings.Join(lines, "\n"), "▀") {
+		t.Errorf("drawn image must use the half-block glyph ▀; got %q", lines)
 	}
 }
 
-// TestImagePreviewThroughModel drives selection: an image file is a renderable
-// (binary) selection — placeholder while pending, metadata after the render —
-// and stays non-pre-styled so the plain line is width-fit normally.
+// TestRenderImagePreviewFallback pins D6: a file that cannot be decoded (here a .png
+// that is not a real PNG) degrades to a dim metadata line, never an error or empty pane.
+func TestRenderImagePreviewFallback(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "broken.png")
+	if err := os.WriteFile(p, []byte("not a real png"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	lines, preStyled, err := renderImagePreview(p, nil, 80, "")
+	if err != nil {
+		t.Fatalf("undecodable image must degrade, not error: %v", err)
+	}
+	if preStyled {
+		t.Error("the fallback metadata line is plain → preStyled must be false")
+	}
+	if len(lines) != 1 || !strings.Contains(lines[0], "image") {
+		t.Errorf("fallback must be a single '(image …)' line; got %q", lines)
+	}
+}
+
+// TestImagePreviewThroughModel drives selection: an image file is a renderable (binary)
+// selection — placeholder while pending, the DRAWN image (pre-styled half-blocks) after
+// the render lands.
 func TestImagePreviewThroughModel(t *testing.T) {
 	dir := t.TempDir()
 	writePNG(t, filepath.Join(dir, "pic.png"), 10, 10)
@@ -83,10 +130,10 @@ func TestImagePreviewThroughModel(t *testing.T) {
 	}
 
 	m.renderNow()
-	if m.previewPreStyled {
-		t.Error("image metadata is a plain line → previewPreStyled must be false")
+	if !m.previewPreStyled {
+		t.Error("a drawn image is verbatim ANSI → previewPreStyled must be true")
 	}
-	if !strings.Contains(strings.Join(m.preview, "\n"), "10×10") {
-		t.Errorf("after render, preview should show 10×10 metadata, got %q", m.preview)
+	if !strings.Contains(strings.Join(m.preview, "\n"), "▀") {
+		t.Errorf("after render, preview should be the drawn image (half-blocks), got %q", m.preview)
 	}
 }

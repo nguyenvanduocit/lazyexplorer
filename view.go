@@ -1135,9 +1135,15 @@ func (m model) fullHelp() [][]key.Binding {
 	}
 }
 
-// listTopFor computes the scroll offset so the cursor stays visible in h rows.
+// listTopFor clamps the stored list scroll offset (m.listTop) to a valid window top
+// for a pane of h rows. The offset is the single source of truth for what the list
+// shows: the wheel pans it freely (scrollList) and keyboard nav slides it to keep the
+// cursor visible (revealCursor). listTopFor itself never chases the cursor, so a wheel
+// scroll can park the selection off-screen — the list scrolls without changing the
+// selected file. Render (geometry.listTop) and mouse hit-testing both read this, so
+// they always agree on the visible window.
 func (m model) listTopFor(h int) int {
-	return max(0, m.cursor-h+1)
+	return min(max(0, m.listTop), max(0, len(m.entries)-h))
 }
 
 // fitWidth truncates s to w display columns (rune-aware), padding is left to lipgloss.

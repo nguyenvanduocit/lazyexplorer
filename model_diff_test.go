@@ -263,6 +263,53 @@ func TestSyncPreviewDispatchesDiff(t *testing.T) {
 	}
 }
 
+// TestDiffViewShowsWholeFileEndToEnd is the end-to-end proof of the full-file
+// context promise (FR1): a modified file's preview, rendered all the way through
+// View().Content, shows the WHOLE file — distant unchanged lines kept as context —
+// with the edit in place, not a truncated hunk window. The earlier diff tests use a
+// 3-line fixture that fits inside git's default context anyway, so they cannot tell
+// truncated from whole-file. This commits a 15-line file and edits line 8: git's
+// default 3-line context would drop the first and last lines, so finding ctx01 /
+// ctx15 in the rendered pane proves the whole file survives the full pipeline
+// (diffHunks → applyPreview → renderPreview), the view the user actually reads.
+func TestDiffViewShowsWholeFileEndToEnd(t *testing.T) {
+	repo := t.TempDir()
+	gitExec(t, repo, "init")
+	base := "ctx01\nctx02\nctx03\nctx04\nctx05\nctx06\nctx07\nctx08\nctx09\nctx10\nctx11\nctx12\nctx13\nctx14\nctx15\n"
+	mustWrite(t, repo, "big.txt", base)
+	gitExec(t, repo, "add", ".")
+	gitExec(t, repo, "commit", "-m", "init")
+	mustWrite(t, repo, "big.txt", strings.Replace(base, "ctx08", "EDITED", 1)) // edit deep in the middle
+
+	m := modelAt(t, repo, 120, 40)
+	m.diffOn = true // modelAt struct-constructs diffOn=false; the ship default is true (D3)
+	if m.git.repoRoot == "" {
+		m.git.repoRoot = detectRepoRoot(m.root)
+		m.gitRootPrefix = repoRelPrefix(m.git.repoRoot, m.root)
+	}
+	state, _ := collectGitState(m.git.repoRoot, nil)
+	var tm tea.Model = m
+	tm, _ = tm.Update(gitRefreshedMsg{gen: m.gitGen, state: state})
+	m = tm.(model)
+
+	selectEntry(t, &m, "big.txt")
+	if !m.previewIsDiff {
+		t.Fatalf("big.txt (modified text) must be on the diff path; changes=%v", m.git.changes)
+	}
+	m.renderNow()
+
+	view := ansi.Strip(m.View().Content)
+	if !strings.Contains(view, "EDITED") {
+		t.Errorf("rendered diff view must show the edit; got:\n%s", view)
+	}
+	// Distant unchanged lines present → the WHOLE file is rendered, not a hunk window.
+	for _, want := range []string{"ctx01", "ctx02", "ctx15"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("full-file diff view must keep distant context line %q; got:\n%s", want, view)
+		}
+	}
+}
+
 // TestSyncPreviewDiffStaleGenDropped pins FR7: a diff result whose gen no longer
 // matches (the user navigated on) is dropped by the unchanged applyPreview gate.
 func TestSyncPreviewDiffStaleGenDropped(t *testing.T) {
@@ -569,4 +616,67 @@ func (r *fieldRecorder) names() []string {
 		out = append(out, e.name)
 	}
 	return out
+}
+
+// TestChangesPreviewOfDeletedFileShowsPlaceholder pins the deleted-row preview
+// (changed-only-view residual): a git-deleted file is gone from the working tree, so
+// reading it would surface a raw "open …: no such file" errno. Selecting it in the
+// changes view must show a clean "(deleted)" placeholder instead.
+func TestChangesPreviewOfDeletedFileShowsPlaceholder(t *testing.T) {
+	m := diffModel(t, func(repo string) {
+		if err := os.Remove(filepath.Join(repo, "tracked.txt")); err != nil {
+			t.Fatal(err)
+		}
+	})
+	// Enter the changes view so the deleted path appears as a selectable entry.
+	var tm tea.Model = m
+	tm, _ = tm.Update(tea.KeyPressMsg{Code: 'c', Text: "c"})
+	m = tm.(model)
+	selectEntry(t, &m, "tracked.txt")
+	got := ansi.Strip(strings.Join(m.preview, "\n"))
+	if got != "(deleted)" {
+		t.Errorf("preview of a git-deleted file must be the (deleted) placeholder; got %q", got)
+	}
+}
+
+// TestChangesEntersFromPreviewFocus pins that `c` opens the changes view regardless of
+// which pane is focused (changed-only-view residual: no focusList gate on km.Changes).
+func TestChangesEntersFromPreviewFocus(t *testing.T) {
+	m := diffModel(t, func(repo string) {
+		mustWrite(t, repo, "tracked.txt", "alpha\nBETA\ngamma\n")
+	})
+	m.focusPane = focusPreview
+	var tm tea.Model = m
+	tm, _ = tm.Update(tea.KeyPressMsg{Code: 'c', Text: "c"})
+	m = tm.(model)
+	if m.mode != modeChanges {
+		t.Errorf("c from preview focus must enter the changes view; mode=%v", m.mode)
+	}
+}
+
+// TestChangesViewCleanTreePreviewsNoChanges pins the clean-tree changes preview
+// (changed-only-view residual): opening the changes view with nothing changed shows a
+// "(no changes)" placeholder in the preview pane, not a stale or empty preview.
+func TestChangesViewCleanTreePreviewsNoChanges(t *testing.T) {
+	repo := t.TempDir()
+	gitExec(t, repo, "init")
+	mustWrite(t, repo, "tracked.txt", "alpha\n")
+	gitExec(t, repo, "add", ".")
+	gitExec(t, repo, "commit", "-m", "init")
+
+	m := modelAt(t, repo, 120, 30)
+	m.diffOn = true
+	if m.git.repoRoot == "" {
+		m.git.repoRoot = detectRepoRoot(m.root)
+		m.gitRootPrefix = repoRelPrefix(m.git.repoRoot, m.root)
+	}
+	state, _ := collectGitState(m.git.repoRoot, nil)
+	var tm tea.Model = m
+	tm, _ = tm.Update(gitRefreshedMsg{gen: m.gitGen, state: state})
+	tm, _ = tm.Update(tea.KeyPressMsg{Code: 'c', Text: "c"}) // open changes view on a clean tree
+	m = tm.(model)
+	got := ansi.Strip(strings.Join(m.preview, "\n"))
+	if got != "(no changes)" {
+		t.Errorf("changes view on a clean tree must preview (no changes); got %q", got)
+	}
 }

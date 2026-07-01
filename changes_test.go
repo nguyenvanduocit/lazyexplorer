@@ -340,7 +340,7 @@ func TestChangesRowPreviewShowsDiffNotBinary(t *testing.T) {
 	if strings.Contains(plain, "binary files differ") {
 		t.Errorf("changes row preview must not be the binary placeholder; got %q", plain)
 	}
-	if !strings.Contains(plain, "+func App") {
+	if !strings.Contains(plain, "func App") { // code diff: no gutter, the green wash marks the added line
 		t.Errorf("changes row diff must show the added line; got %q", plain)
 	}
 }
@@ -448,7 +448,7 @@ func TestChangesEnterJumpToDiff(t *testing.T) {
 		t.Fatalf("landing on modified app.go must select the diff path (previewIsDiff=false)")
 	}
 	plain := ansi.Strip(strings.Join(m.preview, "\n"))
-	if !strings.Contains(plain, "+func App") {
+	if !strings.Contains(plain, "func App") { // code diff: no gutter, the green wash marks the added line
 		t.Errorf("diff hunk must show the added line; preview =\n%s", plain)
 	}
 }

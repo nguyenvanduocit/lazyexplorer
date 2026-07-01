@@ -6,6 +6,7 @@ package main
 // of the dirSig gate (D9), and the end-to-end View showing a badge.
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -121,5 +122,109 @@ func TestViewShowsGitBadge(t *testing.T) {
 	badgeSGR := leadingSGR(t, lipgloss.NewStyle().Foreground(gitColor(gitModified)))
 	if !strings.Contains(content, badgeSGR+"M") {
 		t.Errorf("the M badge should carry the modified color; got:\n%q", content)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ignored-entry dimming + ordering (prd-ignored-entry-dimming §5.2)
+// ---------------------------------------------------------------------------
+
+// ignoredModel builds a minimal model whose jail root == repo root (gitRootPrefix
+// empty), so repoRelKey maps a cwd entry name straight to its repo-relative key —
+// enough to drive the ignored predicate + ordering without standing up a git tree.
+func ignoredModel(ignored ...string) model {
+	set := map[string]bool{}
+	for _, k := range ignored {
+		set[k] = true
+	}
+	return model{
+		root: "/repo", cwd: "/repo", mode: modeNormal,
+		git: gitState{repoRoot: "/repo", changes: map[string]gitChange{}, dirtyDirs: map[string]bool{}, ignored: set},
+	}
+}
+
+func TestIsIgnoredEntry(t *testing.T) {
+	m := ignoredModel("node_modules", "build.log")
+	if !m.isIgnoredEntry(m.cwd, entry{name: "node_modules", isDir: true}) {
+		t.Error("an ignored dir entry should resolve ignored")
+	}
+	if !m.isIgnoredEntry(m.cwd, entry{name: "build.log"}) {
+		t.Error("an ignored file entry should resolve ignored")
+	}
+	if m.isIgnoredEntry(m.cwd, entry{name: "src", isDir: true}) {
+		t.Error("a normal dir must not be ignored")
+	}
+	if m.isIgnoredEntry(m.cwd, entry{name: "..", isDir: true}) {
+		t.Error("the synthetic .. must never be ignored")
+	}
+	off := model{root: "/repo", cwd: "/repo"} // git mode off
+	if off.isIgnoredEntry(off.cwd, entry{name: "node_modules", isDir: true}) {
+		t.Error("with git mode off nothing is ignored")
+	}
+}
+
+// TestPartitionIgnoredSinksStably pins D5: ignored entries sink BELOW every
+// non-ignored one (absolute bottom), each group keeping its incoming dirs-first-alpha
+// order, with ".." pinned at the top.
+func TestPartitionIgnoredSinksStably(t *testing.T) {
+	m := ignoredModel("node_modules", "dist", "build.log")
+	in := []entry{
+		{name: "..", isDir: true},
+		{name: "dist", isDir: true},         // ignored dir
+		{name: "node_modules", isDir: true}, // ignored dir
+		{name: "src", isDir: true},
+		{name: "build.log"}, // ignored file
+		{name: "main.go"},
+		{name: "readme.md"},
+	}
+	got := names(m.partitionIgnored(in, m.cwd))
+	want := []string{"..", "src", "main.go", "readme.md", "dist", "node_modules", "build.log"}
+	if !slices.Equal(got, want) {
+		t.Errorf("partition order = %v, want %v", got, want)
+	}
+}
+
+func TestPartitionIgnoredIdempotent(t *testing.T) {
+	m := ignoredModel("node_modules")
+	in := []entry{{name: "..", isDir: true}, {name: "node_modules", isDir: true}, {name: "src", isDir: true}, {name: "main.go"}}
+	once := m.partitionIgnored(in, m.cwd)
+	twice := m.partitionIgnored(once, m.cwd)
+	if !slices.Equal(names(once), names(twice)) {
+		t.Errorf("partition not idempotent: once=%v twice=%v", names(once), names(twice))
+	}
+}
+
+func TestPartitionIgnoredNoopOutsideRepo(t *testing.T) {
+	m := model{root: "/repo", cwd: "/repo"} // git mode off
+	in := []entry{{name: "node_modules", isDir: true}, {name: "src", isDir: true}}
+	got := m.partitionIgnored(in, m.cwd)
+	if !slices.Equal(names(got), names(in)) {
+		t.Errorf("outside a repo the order must be untouched; got %v", names(got))
+	}
+}
+
+// TestGitRefreshReordersKeepingCursorByName pins FR10: when a git snapshot lands and
+// marks an entry ignored, the list re-sinks it and the cursor stays on the SAME entry
+// by name (its index shifts as ignored entries move under it).
+func TestGitRefreshReordersKeepingCursorByName(t *testing.T) {
+	m := ignoredModel() // nothing ignored yet
+	m.gitGen, m.gitInFlight = 1, true
+	m.entries = []entry{
+		{name: "..", isDir: true},
+		{name: "node_modules", isDir: true},
+		{name: "src", isDir: true},
+		{name: "main.go"},
+	}
+	m.cursor = 3 // on main.go
+	state := gitState{repoRoot: "/repo", changes: map[string]gitChange{}, dirtyDirs: map[string]bool{}, ignored: map[string]bool{"node_modules": true}}
+	nm, _ := m.Update(gitRefreshedMsg{gen: 1, state: state})
+	m = nm.(model)
+
+	want := []string{"..", "src", "main.go", "node_modules"}
+	if !slices.Equal(names(m.entries), want) {
+		t.Errorf("git-land reorder = %v, want %v", names(m.entries), want)
+	}
+	if m.entries[m.cursor].name != "main.go" {
+		t.Errorf("cursor must stay on main.go by name after reorder; got %q (idx %d)", m.entries[m.cursor].name, m.cursor)
 	}
 }

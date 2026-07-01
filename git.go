@@ -98,10 +98,36 @@ func (g gitChange) deltaString() string {
 //   - changes: keyed by repo-root-relative slash path; the authoritative badge set.
 //   - dirtyDirs: every ancestor directory (repo-rel slash) of a changed path, so a
 //     folder roll-up (●) is an O(1) lookup at render instead of an O(n) map scan.
+//   - ignored: every git-ignored entry, keyed by repo-rel slash (a directory record
+//     is the collapsed dir key, slash stripped). The list pane dims + sinks these
+//     (prd-ignored-entry-dimming §5.1); looked up via isIgnored's ancestor-walk.
 type gitState struct {
 	repoRoot  string
 	changes   map[string]gitChange
 	dirtyDirs map[string]bool
+	ignored   map[string]bool
+}
+
+// isIgnored reports whether a repo-relative slash path is git-ignored: true when the
+// path itself OR any ancestor directory is in the ignored set (D7). The collapsed
+// "!! tmp/" record means "tmp and everything beneath it", so an entry inside an
+// ignored dir — whose own path is not a literal record — still resolves ignored. It
+// is the inverse walk of markAncestors. A nil map (git primed, no refresh landed yet)
+// reads as not-ignored, which is safe.
+func (s gitState) isIgnored(rel string) bool {
+	if s.ignored[rel] {
+		return true
+	}
+	for {
+		i := strings.LastIndexByte(rel, '/')
+		if i < 0 {
+			return false
+		}
+		rel = rel[:i]
+		if s.ignored[rel] {
+			return true
+		}
+	}
 }
 
 // runGit execs `git -C dir <args>` with a timeout, returning stdout. stderr is
@@ -158,7 +184,7 @@ type untrackedCache map[string]untrackedStat
 // a failed numstat (e.g. a no-commit repo where `diff HEAD` aborts) leaves badges
 // intact with no deltas (per-command independence).
 func collectGitState(repoRoot string, prev untrackedCache) (gitState, untrackedCache) {
-	st := gitState{repoRoot: repoRoot, changes: map[string]gitChange{}, dirtyDirs: map[string]bool{}}
+	st := gitState{repoRoot: repoRoot, changes: map[string]gitChange{}, dirtyDirs: map[string]bool{}, ignored: map[string]bool{}}
 	if repoRoot == "" {
 		return st, prev
 	}
@@ -191,7 +217,31 @@ func collectGitState(repoRoot string, prev untrackedCache) (gitState, untrackedC
 	for k := range st.changes {
 		markAncestors(k, st.dirtyDirs)
 	}
+
+	// 5. Ignored set (prd-ignored-entry-dimming D1): a SEPARATE status WITHOUT -uall,
+	//    so an ignored directory collapses to one "!! dir/" record instead of expanding
+	//    to every file under it (the -uall call above would yield hundreds of file rows
+	//    and no directory key). Per-command degrade (FR9): a failure leaves `ignored`
+	//    empty — nothing dimmed, nothing reordered — and never blanks the change state.
+	if ignOut, ierr := runGit(repoRoot, "status", "--porcelain=v1", "-z", "--ignored"); ierr == nil {
+		parseIgnored(ignOut, st.ignored)
+	}
 	return st, next
+}
+
+// parseIgnored picks the "!! path" records from `git status --porcelain -z --ignored`
+// (run WITHOUT -uall, D1) into the ignored set, keyed by repo-relative slash path. A
+// directory record carries a trailing slash ("!! tmp/") that is stripped so the key
+// matches the changes/dirtyDirs key space (and isIgnored's ancestor-walk). The regular
+// change records the same stream also emits (" M …", "?? …") are skipped — only "!!".
+func parseIgnored(data []byte, ignored map[string]bool) {
+	for _, f := range splitNUL(data) {
+		if len(f) < 4 || f[0] != '!' || f[1] != '!' { // "!! " + ≥1 path char
+			continue
+		}
+		p := strings.TrimSuffix(f[3:], "/") // skip the "!! " prefix; drop a dir's trailing slash
+		ignored[filepath.ToSlash(p)] = true
+	}
 }
 
 // splitNUL splits NUL-separated git -z output, dropping the trailing empty field
@@ -366,11 +416,24 @@ func countLines(path string) (int, bool) {
 	return lines, true
 }
 
+// diffFullContext is the -U (unified context) value diffHunks passes so the WHOLE
+// file renders — every unchanged line kept as dim context around the coloured
+// edits (prd-preview-diff-view FR1) — instead of git's default 3-line hunk window,
+// which would truncate the file to a few lines around each change. A value larger
+// than any realistic source file's line count collapses all hunks into one that
+// spans the file; 1e9 sits well inside git's int32 -U arg and no real file
+// approaches it. An UNCHANGED file still produces an empty diff (there is no
+// context without a change), so the empty-diff → full-content fallback (D10/FR6)
+// is unaffected by the larger window.
+const diffFullContext = "1000000000"
+
 // diffHunks fetches the unified diff of one repo-relative path against the same
-// HEAD-aware base the +N/-N badge uses (prd-preview-diff-view FR2/D7), colorizes
-// each line by its leading character (D11), and returns preview lines with
-// preStyled=true (verbatim ANSI, like code). On any failure OR an empty diff it
-// returns (nil, false, err) — a non-nil error — so the syncPreview closure
+// HEAD-aware base the +N/-N badge uses (prd-preview-diff-view FR2/D7), with
+// FULL-FILE context (diffFullContext) so the whole file is shown — unchanged lines
+// as dim context, the edits coloured in place — not a truncated hunk window.
+// It colorizes each line by its leading character (D11) and returns preview lines
+// with preStyled=true (verbatim ANSI, like code). On any failure OR an empty diff
+// it returns (nil, false, err) — a non-nil error — so the syncPreview closure
 // degrades to full content (FR6/FR10). repoRoot + relPath are captured from model
 // state by the syncPreview closure, NOT passed through the registry render
 // signature (D2). Each line is colored full-width; the preview pane windows it
@@ -386,9 +449,9 @@ func diffHunks(repoRoot, relPath string) ([]string, bool, error) {
 	var out []byte
 	var err error
 	if _, herr := runGit(repoRoot, "rev-parse", "--verify", "-q", "HEAD"); herr == nil {
-		out, err = runGit(repoRoot, "diff", "--no-color", "HEAD", "--", relPath)
+		out, err = runGit(repoRoot, "diff", "--no-color", "-U"+diffFullContext, "HEAD", "--", relPath)
 	} else {
-		out, err = runGit(repoRoot, "diff", "--no-color", "--cached", "--", relPath)
+		out, err = runGit(repoRoot, "diff", "--no-color", "-U"+diffFullContext, "--cached", "--", relPath)
 	}
 	if err != nil {
 		return nil, false, err // FR10: any git failure → degrade to full content
@@ -399,33 +462,150 @@ func diffHunks(repoRoot, relPath string) ([]string, bool, error) {
 		return nil, false, errEmptyDiff
 	}
 
-	// Colorize each line by its role (D11). Each line is styled independently with
-	// self-contained ANSI (open+close SGR), like chroma's code output, so
-	// renderHWindow's horizontal slicing never cuts mid-escape (FR8). The leading
-	// +/-/space character is kept so the diff reads even without color.
-	//
-	// Header lines are discriminated POSITIONALLY, not by a 3-char prefix: the
-	// "diff --git"/"index"/"--- a/…"/"+++ b/…" preamble appears exactly once, before
-	// the first "@@" hunk header — and diffHunks runs on a single path, so the output
-	// is one preamble then hunk bodies. Keying headers on a "---"/"+++" prefix would
-	// misread a CONTENT line whose source begins with '-'/'+' (a removed `-- comment`
-	// renders `--- keep comment`; an added `++x` renders `+++x`) as a header and dim
-	// it instead of red/green. Once seenHunk, every line keys purely on its first
-	// byte: '+' → add, '-' → remove, ' '/'@'/'\' → dim (default arm).
-	raw := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
-	lines := make([]string, 0, len(raw))
-	seenHunk := false
-	for _, line := range raw {
-		if !seenHunk {
-			if strings.HasPrefix(line, "@@") {
-				seenHunk = true
-			}
-			lines = append(lines, dimStyle.Render(line)) // preamble header → dim
-			continue
+	// Expand tabs to previewTabWidth spaces BEFORE styling, so the diff's
+	// indentation matches every other preview (normalizeText) instead of being
+	// left to lipgloss's Render-time TabWidth (which defaults to 4 — a different,
+	// shallower indent). Doing it on the source bytes (not at render) also keeps
+	// the buffer tab-free for the Y/V copy path. CRLF is deliberately NOT touched
+	// here: in a diff a trailing \r can be the change being shown (an EOL-only
+	// edit), so stripping it would hide the hunk. Tab expansion never moves the
+	// leading +/-/@ gutter byte the header/prefix logic keys on, so applying it to
+	// the whole blob before the split is safe.
+	expanded := strings.ReplaceAll(string(out), "\t", strings.Repeat(" ", previewTabWidth))
+	raw := strings.Split(strings.TrimRight(expanded, "\n"), "\n")
+
+	// The "diff --git"/"index"/"--- a/…"/"+++ b/…" preamble appears exactly once, before
+	// the lone "@@" hunk header (diffHunks runs on a single path). Find it POSITIONALLY,
+	// never by a "---"/"+++" prefix — a content line beginning '-'/'+' (a removed
+	// `-- comment` renders `--- keep comment`) would be misread otherwise.
+	hunkIdx := -1
+	for i, line := range raw {
+		if strings.HasPrefix(line, "@@") {
+			hunkIdx = i
+			break
 		}
-		lines = append(lines, diffLineStyle(diffPrefix(line)).Render(line))
+	}
+	if hunkIdx < 0 {
+		// No "@@" at all (defensive — a real unified diff always has one): dim it all
+		// rather than guess a body split.
+		lines := make([]string, 0, len(raw))
+		for _, line := range raw {
+			lines = append(lines, dimStyle.Render(line))
+		}
+		return lines, true, nil
+	}
+	body := raw[hunkIdx+1:]
+	lines := make([]string, 0, len(raw))
+
+	// Each line is styled with self-contained ANSI (open+close SGR per line), like
+	// chroma's code output, so renderHWindow's horizontal slicing never cuts mid-escape
+	// (FR8). Non-code files keep the git-CLI role coloring (D11): dim the preamble (incl.
+	// the "@@" header), then colour each body line green/red/dim by its leading byte. The
+	// leading +/-/space gutter byte is kept so the diff reads even without colour.
+	name := filepath.Base(relPath)
+	if matchLang(name) == "" {
+		for _, line := range raw[:hunkIdx+1] {
+			lines = append(lines, dimStyle.Render(line))
+		}
+		for _, line := range body {
+			lines = append(lines, diffLineStyle(diffPrefix(line)).Render(line))
+		}
+		return lines, true, nil
+	}
+
+	// Source file: a clean SYNTAX-HIGHLIGHTED view of the whole file (context and edits
+	// alike, like the `v` full-content view), with the changes flagged by a BOLD coloured
+	// gutter BAR (diffGutter) — a 2-cell green "+ " / red "- " block on changed lines, two
+	// spaces on context. The git preamble (diff --git/index/---/+++/@@) is DROPPED here:
+	// it is plumbing noise for a "read the file with its changes" view, and the gutter
+	// bars already say what changed (a non-code file keeps it as dim header rows above).
+	// The signal rides the reset-free gutter cells, NOT a whole-line background — chroma
+	// emits a per-token "\x1b[0m" reset that would clobber a line background mid-line. The
+	// glyph stays one +/-/space byte (the trailing bar cell is a space), so the Y/V copy
+	// buffer reads as a normal diff.
+	//
+	// Full-file context (-U<big>) makes the diff a complete file with +/- markers, so the
+	// NEW side (context + additions) and OLD side (context + removals) each reconstruct an
+	// entire source file. Tokenizing each as ONE unit gives chroma the multi-line context
+	// (block comments, multi-line strings) per-line highlighting can't see — a changed
+	// line inside a `/* */` colours as a comment. Context lines feed BOTH the tokenizer
+	// (right indices + surrounding syntax) and the rendered output (drawn from newHL).
+	var newSrc, oldSrc []string
+	for _, line := range body {
+		code := diffBodyCode(line)
+		switch diffPrefix(line) {
+		case '+':
+			newSrc = append(newSrc, code)
+		case '-':
+			oldSrc = append(oldSrc, code)
+		case ' ', 0: // context (incl. a blank context line) belongs to both sides
+			newSrc = append(newSrc, code)
+			oldSrc = append(oldSrc, code)
+		}
+	}
+	// Three tokenization passes over the reconstructed sides — chroma sees each as a whole
+	// file (multi-line context right), and the SAME source is highlighted twice with
+	// different washes so a line's role decides its background with no per-line surgery:
+	//   ctxHL — new side, no wash    → context lines
+	//   addHL — new side, green wash → added lines
+	//   delHL — old side, red wash   → removed lines
+	// The wash IS the diff signal (no gutter glyph), so code starts at column 0.
+	ctxHL, e1 := highlightCode(strings.Join(newSrc, "\n"), name)
+	addHL, e2 := highlightCodeBg(strings.Join(newSrc, "\n"), name, colDiffAddBg)
+	delHL, e3 := highlightCodeBg(strings.Join(oldSrc, "\n"), name, colDiffDelBg)
+	if e1 != nil || e2 != nil || e3 != nil || ctxHL == nil {
+		// Highlighter failed (rare): degrade to the dim-preamble + role-coloured body,
+		// never an error.
+		for _, line := range raw[:hunkIdx+1] {
+			lines = append(lines, dimStyle.Render(line))
+		}
+		for _, line := range body {
+			lines = append(lines, diffLineStyle(diffPrefix(line)).Render(line))
+		}
+		return lines, true, nil
+	}
+
+	ni, oi := 0, 0
+	for _, line := range body {
+		switch diffPrefix(line) {
+		case '+':
+			lines = append(lines, hlAt(addHL, ni, diffBodyCode(line)))
+			ni++
+		case '-':
+			lines = append(lines, hlAt(delHL, oi, diffBodyCode(line)))
+			oi++
+		case ' ', 0:
+			// Context: highlighted, no wash. ni/oi both advance — context is in both
+			// reconstructions, keeping the changed lines' indices aligned.
+			lines = append(lines, hlAt(ctxHL, ni, diffBodyCode(line)))
+			ni++
+			oi++
+		default: // '\' "No newline at end of file" — metadata, not a content line.
+			lines = append(lines, dimStyle.Render(line))
+		}
 	}
 	return lines, true, nil
+}
+
+// diffBodyCode strips the single leading +/-/space gutter byte from a hunk-body line,
+// yielding the bare source text the line carries (empty for a zero-length line). It is
+// the inverse of the gutter glyph diffHunks re-prepends, and what the new/old side
+// reconstructions tokenize.
+func diffBodyCode(line string) string {
+	if len(line) == 0 {
+		return ""
+	}
+	return line[1:]
+}
+
+// hlAt returns the i-th highlighted line, or fallback when i is past the slice —
+// highlightCode trims trailing blank lines, so a reconstruction ending in blanks can be
+// shorter than its source line count; those tail lines are blank anyway.
+func hlAt(hl []string, i int, fallback string) string {
+	if i >= 0 && i < len(hl) {
+		return hl[i]
+	}
+	return fallback
 }
 
 // diffPrefix reduces a hunk-body line to the single byte diffLineStyle keys on
